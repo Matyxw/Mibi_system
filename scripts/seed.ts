@@ -2,7 +2,19 @@ import { randomBytes, scryptSync } from 'node:crypto';
 import postgres from 'postgres';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { eq } from 'drizzle-orm';
-import * as schema from '../src/lib/db/schema';
+import { boolean, integer, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+
+const usuarios = pgTable('usuarios', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  username: text('username').notNull().unique(),
+  nombre: text('nombre').notNull(),
+  rol: text('rol').$type<'ADMIN' | 'VENTAS_DEPOSITO'>().notNull(),
+  passwordHash: text('password_hash').notNull(),
+  activo: boolean('activo').notNull().default(true),
+  tokenVersion: integer('token_version').notNull().default(1),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
+});
 
 const hashPasswordLocal = (plainPassword: string): string => {
   const salt = randomBytes(16).toString('hex');
@@ -26,7 +38,7 @@ async function main(): Promise<void> {
   }
 
   const client = postgres(dbUrl, { prepare: false, ssl: 'require', max: 1 });
-  const db = drizzle(client, { schema });
+  const db = drizzle(client);
 
   const seedUsers: Array<{ username: string; nombre: string; rol: 'ADMIN' | 'VENTAS_DEPOSITO'; password: string }> = [
     { username: 'admin', nombre: 'Administración', rol: 'ADMIN', password: adminPassword },
@@ -39,15 +51,15 @@ async function main(): Promise<void> {
 
   for (const item of seedUsers) {
     const existing = await db
-      .select({ id: schema.usuarios.id, tokenVersion: schema.usuarios.tokenVersion })
-      .from(schema.usuarios)
-      .where(eq(schema.usuarios.username, item.username))
+      .select({ id: usuarios.id, tokenVersion: usuarios.tokenVersion })
+      .from(usuarios)
+      .where(eq(usuarios.username, item.username))
       .limit(1);
 
     const passwordHash = hashPasswordLocal(item.password);
     if (existing[0]) {
       await db
-        .update(schema.usuarios)
+        .update(usuarios)
         .set({
           nombre: item.nombre,
           rol: item.rol,
@@ -56,10 +68,10 @@ async function main(): Promise<void> {
           tokenVersion: existing[0].tokenVersion + 1,
           updatedAt: new Date()
         })
-        .where(eq(schema.usuarios.id, existing[0].id));
+        .where(eq(usuarios.id, existing[0].id));
       console.log(`Actualizado: ${item.username} (${item.rol})`);
     } else {
-      await db.insert(schema.usuarios).values({
+      await db.insert(usuarios).values({
         username: item.username,
         nombre: item.nombre,
         rol: item.rol,
