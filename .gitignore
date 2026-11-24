@@ -1,13 +1,20 @@
 # Dependencies
 node_modules/
 
-# Build output
+# Next.js build output
+.next/
+out/
 dist/
+*.tsbuildinfo
+next-env.d.ts
 
 # Environment variables
 .env
 .env.*
 !.env.example
+
+# Isolated local dev persistence
+.local-data/
 
 # Logs & OS files
 *.log
