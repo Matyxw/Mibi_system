@@ -48,11 +48,11 @@ export function PedidosTable({
   }, [seleccionParcialVisible]);
 
   return (
-    <div className="bg-white rounded-2xl border border-[#EAEAEA] shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden">
+    <div className="bg-white dark:bg-[#141417] rounded-2xl border border-[#EAEAEA] dark:border-[#26262B] shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden">
       <div className="overflow-x-auto">
         <table className="w-full text-left border-collapse">
           <thead>
-            <tr className="border-b border-zinc-200/70 text-[11px] font-medium text-zinc-400">
+            <tr className="border-b border-zinc-200/70 dark:border-[#26262B] text-[11px] font-medium text-zinc-400 dark:text-zinc-500">
               <th className="py-3.5 pl-5 pr-2 w-10">
                 <input
                   ref={headerCheckboxRef}
@@ -61,7 +61,7 @@ export function PedidosTable({
                   onChange={onToggleSelectAll}
                   disabled={pedidosFiltrados.length === 0}
                   aria-label="Seleccionar todos los pedidos visibles"
-                  className="w-4 h-4 rounded border-zinc-300 text-zinc-900 accent-zinc-900 cursor-pointer align-middle disabled:opacity-30"
+                  className="w-4 h-4 rounded border-zinc-300 dark:border-zinc-600 text-zinc-900 accent-zinc-900 dark:accent-[#F4B6CE] cursor-pointer align-middle disabled:opacity-30"
                 />
               </th>
               <th className="py-3.5 pl-2 pr-3">N.º y Fecha</th>
@@ -82,10 +82,10 @@ export function PedidosTable({
               <th className="py-3.5 pl-3 pr-6 text-right">Acción</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-zinc-200/60 text-sm">
+          <tbody className="divide-y divide-zinc-200/60 dark:divide-[#26262B]/80 text-sm">
             {pedidosFiltrados.length === 0 ? (
               <tr>
-                <td colSpan={7} className="py-14 text-center text-sm text-zinc-400">
+                <td colSpan={7} className="py-14 text-center text-sm text-zinc-400 dark:text-zinc-500">
                   No hay pedidos con ese filtro.
                 </td>
               </tr>
@@ -112,7 +112,9 @@ export function PedidosTable({
                     key={p.id}
                     onClick={() => onOpenDrawer(p.id)}
                     className={`cursor-pointer transition-colors ${
-                      seleccionado ? 'bg-pink-50/45 hover:bg-pink-50/70' : 'hover:bg-zinc-50/80'
+                      seleccionado
+                        ? 'bg-pink-50/45 hover:bg-pink-50/70 dark:bg-[#F4B6CE]/[0.08] dark:hover:bg-[#F4B6CE]/[0.12]'
+                        : 'hover:bg-zinc-50/80 dark:hover:bg-[#1B1B1F]'
                     }`}
                   >
                     <td
@@ -127,17 +129,17 @@ export function PedidosTable({
                         checked={seleccionado}
                         onChange={() => {}}
                         aria-label={`Seleccionar pedido #${p.numeroPedido}`}
-                        className="w-4 h-4 rounded border-zinc-300 text-zinc-900 accent-zinc-900 cursor-pointer align-middle pointer-events-none"
+                        className="w-4 h-4 rounded border-zinc-300 dark:border-zinc-600 text-zinc-900 accent-zinc-900 dark:accent-[#F4B6CE] cursor-pointer align-middle pointer-events-none"
                       />
                     </td>
 
                     <td className="py-3.5 pl-2 pr-3 whitespace-nowrap tabular-nums">
-                      <div className="font-semibold text-[#111111]">#{p.numeroPedido}</div>
-                      <div className="text-xs text-zinc-400 mt-0.5 flex items-center gap-1.5">
+                      <div className="font-semibold text-[#111111] dark:text-[#F4F4F5]">#{p.numeroPedido}</div>
+                      <div className="text-xs text-zinc-400 dark:text-zinc-500 mt-0.5 flex items-center gap-1.5">
                         <span>{formatShortDate(p.fechaPedido)}</span>
                         {atrasado && (
                           <span
-                            className="w-1.5 h-1.5 rounded-full bg-amber-500"
+                            className="w-1.5 h-1.5 rounded-full bg-amber-500 dark:bg-amber-400"
                             title={`Despacho previsto: ${formatShortDate(p.despachoPrevisto)}`}
                           />
                         )}
@@ -146,11 +148,11 @@ export function PedidosTable({
 
                     <td className="py-3.5 px-3 min-w-[200px]">
                       <div className="flex items-center gap-1.5 flex-wrap">
-                        <span className="font-medium text-[#111111]">{p.cliente}</span>
+                        <span className="font-medium text-[#111111] dark:text-[#F4F4F5]">{p.cliente}</span>
                         {esDeposito && esUrgente && <StatusPill tone="red">Urgente</StatusPill>}
                         {esDeposito && requiereRelectura && <StatusPill tone="amber">Actualizado</StatusPill>}
                       </div>
-                      <div className="text-xs text-zinc-400 mt-0.5">
+                      <div className="text-xs text-zinc-400 dark:text-zinc-500 mt-0.5">
                         {esDeposito
                           ? notaDeposito || p.vendedor
                           : `${p.vendedor}${p.detalleResumen && p.detalleResumen !== '—' ? ` · ${p.detalleResumen}` : ''}`}
@@ -160,22 +162,22 @@ export function PedidosTable({
                     {esDeposito ? (
                       <>
                         <td className="py-3.5 px-3 whitespace-nowrap tabular-nums">
-                          <div className="font-semibold text-[#111111]">{totalUnidades} u.</div>
-                          <div className="text-xs text-zinc-400 mt-0.5">{p.lineas.length} artículos</div>
+                          <div className="font-semibold text-[#111111] dark:text-[#F4F4F5]">{totalUnidades} u.</div>
+                          <div className="text-xs text-zinc-400 dark:text-zinc-500 mt-0.5">{p.lineas.length} artículos</div>
                         </td>
 
                         <td className="py-3.5 px-3 whitespace-nowrap tabular-nums">
-                          <div className="text-xs font-medium text-[#111111]">
+                          <div className="text-xs font-medium text-[#111111] dark:text-[#F4F4F5]">
                             {p.despachoPrevisto ? formatShortDate(p.despachoPrevisto) : '—'}
                           </div>
-                          {atrasado && <div className="text-[11px] text-amber-700 mt-0.5">Atrasado</div>}
+                          {atrasado && <div className="text-[11px] text-amber-700 dark:text-amber-400 mt-0.5">Atrasado</div>}
                         </td>
                       </>
                     ) : (
                       <>
                         <td className="py-3.5 px-3 text-right whitespace-nowrap tabular-nums">
-                          <div className="font-semibold text-[#111111]">{formatARS(p.totalFacturado)}</div>
-                          <div className="text-xs text-zinc-400 mt-0.5">
+                          <div className="font-semibold text-[#111111] dark:text-[#F4F4F5]">{formatARS(p.totalFacturado)}</div>
+                          <div className="text-xs text-zinc-400 dark:text-zinc-500 mt-0.5">
                             {esChequePendiente
                               ? chequeAlCobro
                                 ? diasCheque === 0
@@ -206,7 +208,7 @@ export function PedidosTable({
                               <button
                                 type="button"
                                 onClick={() => onConfirmarAcreditacion(p)}
-                                className="text-[11px] font-medium text-emerald-700 hover:text-emerald-800 underline underline-offset-2"
+                                className="text-[11px] font-medium text-emerald-700 hover:text-emerald-800 dark:text-emerald-400 dark:hover:text-emerald-300 underline underline-offset-2"
                               >
                                 Confirmar plata acreditada
                               </button>
@@ -228,20 +230,20 @@ export function PedidosTable({
                           <StatusPill tone="neutral">Por armar</StatusPill>
                         )}
                         {p.estadoEnvio !== 'Pendiente' ? (
-                          <span className="text-[11px] text-zinc-400 pl-0.5">
+                          <span className="text-[11px] text-zinc-400 dark:text-zinc-500 pl-0.5">
                             {p.estadoEnvio}
                             {p.transporte ? ` · ${p.transporte}` : ''}
                           </span>
                         ) : atrasado && !esDeposito ? (
-                          <span className="text-[11px] text-amber-700 pl-0.5">Despacho atrasado</span>
+                          <span className="text-[11px] text-amber-700 dark:text-amber-400 pl-0.5">Despacho atrasado</span>
                         ) : null}
 
                         {!esDeposito && (
                           <span className="text-[11px] pl-0.5">
                             {p.incidenciaDeposito ? (
-                              <span className="text-amber-700 font-medium">Aviso de depósito</span>
+                              <span className="text-amber-700 dark:text-amber-400 font-medium">Aviso de depósito</span>
                             ) : asigsDeposito.length > 0 ? (
-                              <span className={esUrgente ? 'text-red-600 font-medium' : 'text-zinc-400'}>
+                              <span className={esUrgente ? 'text-red-600 dark:text-red-400 font-medium' : 'text-zinc-400 dark:text-zinc-500'}>
                                 {esUrgente
                                   ? 'Urgente · Depósito'
                                   : requiereRelectura
@@ -251,7 +253,7 @@ export function PedidosTable({
                                       : 'En Depósito · Sin leer'}
                               </span>
                             ) : (
-                              <span className="text-zinc-400">
+                              <span className="text-zinc-400 dark:text-zinc-500">
                                 {esAdmin ? 'Solo en Administración' : 'En seguimiento'}
                               </span>
                             )}
@@ -269,7 +271,7 @@ export function PedidosTable({
                           <button
                             type="button"
                             onClick={() => onOpenDrawer(p.id)}
-                            className="px-3 py-1.5 rounded-full text-xs font-medium bg-red-50 text-red-700 border border-red-200/70 hover:bg-red-100/70 transition-colors"
+                            className="px-3 py-1.5 rounded-full text-xs font-medium bg-red-50 text-red-700 border border-red-200/70 hover:bg-red-100/70 dark:bg-red-500/[0.12] dark:text-red-300 dark:border-red-500/25 dark:hover:bg-red-500/20 transition-colors"
                           >
                             Completar
                           </button>
@@ -277,7 +279,7 @@ export function PedidosTable({
                           <button
                             type="button"
                             onClick={() => onExportarHojaDeposito(p)}
-                            className="px-3 py-1.5 rounded-full text-xs font-medium bg-white text-zinc-700 border border-zinc-200 hover:bg-zinc-50 transition-colors"
+                            className="px-3 py-1.5 rounded-full text-xs font-medium bg-white text-zinc-700 border border-zinc-200 hover:bg-zinc-50 dark:bg-[#1B1B1F] dark:text-zinc-200 dark:border-[#2E2E35] dark:hover:bg-[#24242B] transition-colors"
                           >
                             Hoja depósito
                           </button>
@@ -285,7 +287,7 @@ export function PedidosTable({
                         <button
                           type="button"
                           onClick={() => onOpenDrawer(p.id)}
-                          className="p-1.5 rounded-full text-zinc-400 hover:text-zinc-800 hover:bg-zinc-100 transition-colors"
+                          className="p-1.5 rounded-full text-zinc-400 hover:text-zinc-800 hover:bg-zinc-100 dark:hover:text-[#F4F4F5] dark:hover:bg-[#24242B] transition-colors"
                           aria-label="Ver detalle"
                         >
                           <ChevronRight className="w-4 h-4" strokeWidth={1.5} />

@@ -243,17 +243,17 @@ export function PedidoDrawer({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex justify-end bg-black/25 backdrop-blur-[1px]"
+      className="fixed inset-0 z-50 flex justify-end bg-black/25 dark:bg-black/60 backdrop-blur-[1px]"
       onClick={onClose}
     >
       <aside
         onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-xl bg-white h-full overflow-y-auto border-l border-[#EAEAEA] shadow-2xl flex flex-col"
+        className="w-full max-w-xl bg-white dark:bg-[#141417] h-full overflow-y-auto border-l border-[#EAEAEA] dark:border-[#26262B] shadow-2xl flex flex-col"
       >
-        <div className="sticky top-0 z-10 bg-white/95 backdrop-blur border-b border-[#EAEAEA] px-6 py-4 flex items-center justify-between gap-3">
+        <div className="sticky top-0 z-10 bg-white/95 dark:bg-[#141417]/90 backdrop-blur border-b border-[#EAEAEA] dark:border-[#26262B] px-6 py-4 flex items-center justify-between gap-3">
           <div>
             <div className="flex items-center gap-2 flex-wrap">
-              <h2 className="text-base font-semibold text-[#111111] tabular-nums">
+              <h2 className="text-base font-semibold text-[#111111] dark:text-[#F4F4F5] tabular-nums">
                 Pedido #{pedido.numeroPedido}
               </h2>
               {pedido.faltantesVariante > 0 ? (
@@ -266,14 +266,14 @@ export function PedidoDrawer({
               {esUrgenteDeposito && <StatusPill tone="red">Urgente</StatusPill>}
               {esDeposito && requiereRelectura && <StatusPill tone="amber">Actualizado</StatusPill>}
             </div>
-            <p className="text-xs text-zinc-500 mt-0.5">
+            <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">
               {pedido.cliente} · {pedido.vendedor}
             </p>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="p-2 rounded-full text-zinc-400 hover:text-zinc-900 hover:bg-zinc-100"
+            className="p-2 rounded-full text-zinc-400 hover:text-zinc-900 hover:bg-zinc-100 dark:hover:text-[#F4F4F5] dark:hover:bg-[#1B1B1F]"
             aria-label="Cerrar panel"
           >
             <X className="w-4 h-4" strokeWidth={1.5} />
@@ -286,7 +286,7 @@ export function PedidoDrawer({
               type="button"
               disabled={pedido.faltantesVariante > 0 || pedido.lineas.length === 0}
               onClick={() => onExportarHojaDeposito(pedido)}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full text-xs font-medium bg-zinc-900 text-white hover:bg-zinc-800 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full text-xs font-medium bg-zinc-900 text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-white transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
             >
               <Download className="w-3.5 h-3.5" strokeWidth={1.5} />
               Hoja depósito (.xlsx)
@@ -296,7 +296,7 @@ export function PedidoDrawer({
               type="button"
               disabled={pedido.faltantesVariante > 0}
               onClick={() => setMostrarHojaImprimible(!mostrarHojaImprimible)}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full text-xs font-medium bg-white border border-zinc-200 text-zinc-700 hover:bg-zinc-50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full text-xs font-medium bg-white border border-zinc-200 text-zinc-700 hover:bg-zinc-50 dark:bg-[#1B1B1F] dark:border-[#2E2E35] dark:text-zinc-200 dark:hover:bg-[#24242B] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
             >
               <Printer className="w-3.5 h-3.5" strokeWidth={1.5} />
               {mostrarHojaImprimible ? 'Ver gestión' : 'Vista imprimible'}
@@ -306,7 +306,7 @@ export function PedidoDrawer({
               <button
                 type="button"
                 onClick={() => onDuplicarComoNuevo(pedido)}
-                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full text-xs font-medium bg-white border border-zinc-200 text-zinc-700 hover:bg-zinc-50 transition-colors"
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full text-xs font-medium bg-white border border-zinc-200 text-zinc-700 hover:bg-zinc-50 dark:bg-[#1B1B1F] dark:border-[#2E2E35] dark:text-zinc-200 dark:hover:bg-[#24242B] transition-colors"
                 title="Crea un pedido nuevo prellenando cliente, vendedor y WhatsApp"
               >
                 <Copy className="w-3.5 h-3.5" strokeWidth={1.5} />
@@ -316,11 +316,11 @@ export function PedidoDrawer({
           </div>
 
           {mostrarHojaImprimible ? (
-            <div className="mibi-print-area space-y-4 border border-zinc-200 rounded-2xl p-5">
+            <div className="mibi-print-area space-y-4 bg-white text-[#111111] border border-zinc-200 rounded-2xl p-5">
               <div className="flex items-start justify-between border-b border-zinc-200 pb-3">
                 <div>
                   <MibiLogo width={76} variant="pink" />
-                  <div className="text-xs font-semibold mt-2 flex items-center gap-2">
+                  <div className="text-xs font-semibold text-[#111111] mt-2 flex items-center gap-2">
                     <span>HOJA PARA DEPÓSITO — PEDIDO #{pedido.numeroPedido}</span>
                     {esUrgenteDeposito && (
                       <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-red-100 text-red-700">
@@ -328,7 +328,7 @@ export function PedidoDrawer({
                       </span>
                     )}
                   </div>
-                  <div className="text-[11px] text-zinc-500">
+                  <div className="text-[11px] text-zinc-600">
                     Cliente: {pedido.cliente} · Transporte: {pedido.transporte || 'A definir'}
                     {pedido.despachoPrevisto ? ` · Despacho: ${formatShortDate(pedido.despachoPrevisto)}` : ''}
                   </div>
@@ -341,22 +341,22 @@ export function PedidoDrawer({
                 <button
                   type="button"
                   onClick={() => window.print()}
-                  className="px-3 py-1.5 rounded-full text-xs font-medium bg-zinc-900 text-white"
+                  className="no-print px-3 py-1.5 rounded-full text-xs font-medium bg-zinc-900 text-white hover:bg-zinc-800"
                 >
                   Imprimir ahora
                 </button>
               </div>
 
-              <table className="w-full text-xs border-collapse">
+              <table className="w-full text-xs border-collapse text-[#111111]">
                 <thead>
-                  <tr className="border-b border-zinc-200 text-zinc-500">
+                  <tr className="border-b border-zinc-200 text-zinc-600">
                     <th className="py-2 text-left">Código</th>
                     <th className="py-2 text-left">Producto</th>
                     <th className="py-2 text-left">Talle / Color</th>
                     <th className="py-2 text-right">Cantidad pedida</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-zinc-200/60 tabular-nums">
+                <tbody className="divide-y divide-zinc-200/70 tabular-nums">
                   {pedido.lineas.flatMap((l) =>
                     l.desglose
                       .filter((d) => d.cantidad > 0)
@@ -379,7 +379,7 @@ export function PedidoDrawer({
                   </tr>
                 </tfoot>
               </table>
-              <p className="text-[10px] text-zinc-400 pt-2 border-t border-zinc-200">
+              <p className="text-[10px] text-zinc-500 pt-2 border-t border-zinc-200">
                 Mibi® · Ciudad de la Paz 2467, Belgrano, CABA · WhatsApp 11-5606-9384 · contacto@mibi.com.ar
               </p>
             </div>
@@ -389,8 +389,8 @@ export function PedidoDrawer({
                 <div
                   className={`rounded-2xl border p-4 space-y-1.5 text-xs ${
                     esUrgenteDeposito
-                      ? 'bg-red-50/70 border-red-200 text-red-900'
-                      : 'bg-amber-50/70 border-amber-200 text-amber-900'
+                      ? 'bg-red-50/70 border-red-200 text-red-900 dark:bg-red-500/10 dark:border-red-500/25 dark:text-red-200'
+                      : 'bg-amber-50/70 border-amber-200 text-amber-900 dark:bg-amber-500/10 dark:border-amber-500/25 dark:text-amber-200'
                   }`}
                 >
                   <div className="font-semibold flex items-center justify-between gap-2">
@@ -413,30 +413,30 @@ export function PedidoDrawer({
               )}
 
               {pedido.incidenciaDeposito && (
-                <div className="bg-amber-50/80 border border-amber-200 rounded-2xl p-4 space-y-2 text-xs">
+                <div className="bg-amber-50/80 border border-amber-200 dark:bg-amber-500/10 dark:border-amber-500/25 rounded-2xl p-4 space-y-2 text-xs">
                   <div className="flex items-center justify-between gap-2">
-                    <span className="font-semibold text-amber-900 flex items-center gap-1.5">
-                      <AlertTriangle className="w-4 h-4 text-amber-600" strokeWidth={1.75} />
+                    <span className="font-semibold text-amber-900 dark:text-amber-200 flex items-center gap-1.5">
+                      <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400" strokeWidth={1.75} />
                       Aviso de Depósito {pedido.incidenciaPor ? `(${pedido.incidenciaPor})` : ''}
                     </span>
                     {esAdmin && (
                       <button
                         type="button"
                         onClick={() => void onResolverIncidencia(pedido.id)}
-                        className="px-3 py-1 rounded-full text-[11px] font-medium bg-white border border-amber-300 text-amber-900 hover:bg-amber-100"
+                        className="px-3 py-1 rounded-full text-[11px] font-medium bg-white border border-amber-300 text-amber-900 hover:bg-amber-100 dark:bg-[#1B1B1F] dark:border-amber-500/35 dark:text-amber-200 dark:hover:bg-amber-500/20"
                       >
                         Marcar resuelto
                       </button>
                     )}
                   </div>
-                  <p className="text-amber-900">{pedido.incidenciaDeposito}</p>
+                  <p className="text-amber-900 dark:text-amber-200/90">{pedido.incidenciaDeposito}</p>
                 </div>
               )}
 
               {!esDeposito && pedido.faltantesVariante > 0 && (
-                <div className="bg-red-50/70 border border-red-200 rounded-2xl p-4 space-y-3">
+                <div className="bg-red-50/70 border border-red-200 dark:bg-red-500/10 dark:border-red-500/25 rounded-2xl p-4 space-y-3">
                   <div className="flex items-center justify-between gap-2">
-                    <span className="text-xs font-semibold text-red-800">
+                    <span className="text-xs font-semibold text-red-800 dark:text-red-300">
                       Falta definir talle o color ({pedido.faltantesVariante})
                     </span>
                     <button
@@ -450,10 +450,10 @@ export function PedidoDrawer({
                         );
                         onCopyText(`wsp-${pedido.id}`, msg, 'Reclamo para WhatsApp copiado.');
                       }}
-                      className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-medium bg-white border border-red-200 text-red-700 hover:bg-red-50"
+                      className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-medium bg-white border border-red-200 text-red-700 hover:bg-red-50 dark:bg-[#1B1B1F] dark:border-red-500/30 dark:text-red-300 dark:hover:bg-red-500/15"
                     >
                       {copiadoId === `wsp-${pedido.id}` ? (
-                        <Check className="w-3 h-3 text-emerald-600" strokeWidth={1.75} />
+                        <Check className="w-3 h-3 text-emerald-600 dark:text-emerald-400" strokeWidth={1.75} />
                       ) : (
                         <MessageCircle className="w-3 h-3" strokeWidth={1.5} />
                       )}
@@ -470,18 +470,18 @@ export function PedidoDrawer({
                       const key = `drw_${pedido.id}_${l.idLinea}`;
                       const cur = resolucionesManual[key] ?? variantes.map(() => '0');
                       return (
-                        <div key={l.idLinea} className="bg-white rounded-xl border border-red-200/70 p-3 space-y-2">
+                        <div key={l.idLinea} className="bg-white dark:bg-[#1B1B1F] rounded-xl border border-red-200/70 dark:border-red-500/25 p-3 space-y-2">
                           <div className="flex justify-between text-xs">
-                            <span className="font-semibold">{l.nombreProducto}</span>
-                            <span className="font-semibold text-red-700 tabular-nums">
+                            <span className="font-semibold text-[#111111] dark:text-[#F4F4F5]">{l.nombreProducto}</span>
+                            <span className="font-semibold text-red-700 dark:text-red-300 tabular-nums">
                               Total: {l.cantidadTotal} u.
                             </span>
                           </div>
-                          {l.motivoRevision && <p className="text-[11px] text-red-600">{l.motivoRevision}</p>}
+                          {l.motivoRevision && <p className="text-[11px] text-red-600 dark:text-red-400">{l.motivoRevision}</p>}
                           <div className="flex flex-wrap items-end gap-2">
                             {variantes.map((v, vIdx) => (
                               <div key={v.codigo} className="flex-1 min-w-[100px]">
-                                <label className="block text-[11px] text-zinc-500 mb-1">
+                                <label className="block text-[11px] text-zinc-500 dark:text-zinc-400 mb-1">
                                   {v.etiqueta} ({v.codigo})
                                 </label>
                                 <input
@@ -495,7 +495,7 @@ export function PedidoDrawer({
                                     );
                                     setResolucionesManual((prev) => ({ ...prev, [key]: nextArr }));
                                   }}
-                                  className="w-full px-2.5 py-1.5 text-xs bg-white border border-zinc-200 rounded-lg tabular-nums"
+                                  className="w-full px-2.5 py-1.5 text-xs bg-white dark:bg-[#141417] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-lg tabular-nums"
                                 />
                               </div>
                             ))}
@@ -508,7 +508,7 @@ export function PedidoDrawer({
                                   variantes.map((_, idx) => parseInt(cur[idx] ?? '0', 10) || 0)
                                 )
                               }
-                              className="px-3.5 py-1.5 rounded-full text-xs font-medium bg-zinc-900 text-white"
+                              className="px-3.5 py-1.5 rounded-full text-xs font-medium bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-950"
                             >
                               Confirmar
                             </button>
@@ -520,9 +520,9 @@ export function PedidoDrawer({
               )}
 
               {esAdmin && (
-                <div className="space-y-3 bg-[#FAFAFA] rounded-2xl border border-zinc-200/80 p-4 text-xs">
+                <div className="space-y-3 bg-[#FAFAFA] dark:bg-[#1B1B1F] rounded-2xl border border-zinc-200/80 dark:border-[#26262B] p-4 text-xs">
                   <div className="flex items-center justify-between gap-2">
-                    <h3 className="text-xs font-semibold text-zinc-600 uppercase tracking-wider flex items-center gap-1.5">
+                    <h3 className="text-xs font-semibold text-zinc-600 dark:text-zinc-300 uppercase tracking-wider flex items-center gap-1.5">
                       <UserCheck className="w-3.5 h-3.5" strokeWidth={1.5} />
                       Derivación a cuentas
                     </h3>
@@ -532,14 +532,14 @@ export function PedidoDrawer({
                         setMostrarEnviar((prev) => !prev);
                         setRequiereConfirmSinPago(false);
                       }}
-                      className="px-3 py-1 rounded-full text-[11px] font-medium bg-zinc-900 text-white hover:bg-zinc-800"
+                      className="px-3 py-1 rounded-full text-[11px] font-medium bg-zinc-900 text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-white"
                     >
                       {mostrarEnviar ? 'Cerrar envío' : '+ Enviar a cuenta'}
                     </button>
                   </div>
 
                   {pedido.asignaciones.length === 0 ? (
-                    <p className="text-[11px] text-zinc-500">
+                    <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
                       Solo en Administración · Todavía no fue enviado a Depósito ni a Ventas.
                     </p>
                   ) : (
@@ -547,11 +547,11 @@ export function PedidoDrawer({
                       {pedido.asignaciones.map((a) => (
                         <div
                           key={a.id}
-                          className="flex items-center justify-between gap-2 bg-white border border-zinc-200/80 rounded-xl px-3 py-2"
+                          className="flex items-center justify-between gap-2 bg-white dark:bg-[#141417] border border-zinc-200/80 dark:border-[#26262B] rounded-xl px-3 py-2"
                         >
                           <div className="min-w-0">
                             <div className="flex items-center gap-1.5 flex-wrap">
-                              <span className="font-semibold text-[#111111]">{a.usuarioNombre}</span>
+                              <span className="font-semibold text-[#111111] dark:text-[#F4F4F5]">{a.usuarioNombre}</span>
                               {a.prioridad === 'URGENTE' && <StatusPill tone="red">Urgente</StatusPill>}
                               {a.requiereRelectura ? (
                                 <StatusPill tone="amber">Actualizado</StatusPill>
@@ -562,13 +562,13 @@ export function PedidoDrawer({
                               )}
                             </div>
                             {a.notaEnvio && (
-                              <div className="text-[11px] text-zinc-500 truncate mt-0.5">{a.notaEnvio}</div>
+                              <div className="text-[11px] text-zinc-500 dark:text-zinc-400 truncate mt-0.5">{a.notaEnvio}</div>
                             )}
                           </div>
                           <button
                             type="button"
                             onClick={() => void onRetirarAsignacion(pedido.id, a.usuarioId)}
-                            className="p-1 text-zinc-400 hover:text-red-600"
+                            className="p-1 text-zinc-400 hover:text-red-600 dark:hover:text-red-400"
                             title={`Retirar de ${a.usuarioNombre}`}
                             aria-label={`Retirar asignación de ${a.usuarioNombre}`}
                           >
@@ -580,16 +580,16 @@ export function PedidoDrawer({
                   )}
 
                   {mostrarEnviar && (
-                    <div className="pt-2 border-t border-zinc-200/70 space-y-2.5">
+                    <div className="pt-2 border-t border-zinc-200/70 dark:border-[#26262B] space-y-2.5">
                       <div>
-                        <label className="block text-[11px] text-zinc-500 mb-1">Cuenta destino</label>
+                        <label className="block text-[11px] text-zinc-500 dark:text-zinc-400 mb-1">Cuenta destino</label>
                         <select
                           value={cuentaDestinoId}
                           onChange={(e) => {
                             setCuentaDestinoId(e.target.value);
                             setRequiereConfirmSinPago(false);
                           }}
-                          className="w-full px-3 py-2 bg-white border border-zinc-200 rounded-xl"
+                          className="w-full px-3 py-2 bg-white dark:bg-[#141417] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-xl"
                         >
                           <option value="">Elegir cuenta...</option>
                           {cuentasDeposito.length > 0 && (
@@ -615,39 +615,39 @@ export function PedidoDrawer({
 
                       <div className="grid grid-cols-2 gap-2">
                         <div>
-                          <label className="block text-[11px] text-zinc-500 mb-1">Prioridad</label>
+                          <label className="block text-[11px] text-zinc-500 dark:text-zinc-400 mb-1">Prioridad</label>
                           <select
                             value={prioridadEnvio}
                             onChange={(e) => setPrioridadEnvio(e.target.value as PrioridadAsignacion)}
-                            className="w-full px-3 py-2 bg-white border border-zinc-200 rounded-xl"
+                            className="w-full px-3 py-2 bg-white dark:bg-[#141417] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-xl"
                           >
                             <option value="NORMAL">Normal</option>
                             <option value="URGENTE">Urgente</option>
                           </select>
                         </div>
                         <div>
-                          <label className="block text-[11px] text-zinc-500 mb-1">Nota breve (opc.)</label>
+                          <label className="block text-[11px] text-zinc-500 dark:text-zinc-400 mb-1">Nota breve (opc.)</label>
                           <input
                             type="text"
                             maxLength={300}
                             value={notaEnvio}
                             onChange={(e) => setNotaEnvio(e.target.value)}
                             placeholder="Ej. Sale transporte 15hs"
-                            className="w-full px-3 py-2 bg-white border border-zinc-200 rounded-xl"
+                            className="w-full px-3 py-2 bg-white dark:bg-[#141417] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-xl placeholder:text-zinc-400 dark:placeholder:text-zinc-500"
                           />
                         </div>
                       </div>
 
                       {requiereConfirmSinPago ? (
-                        <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 space-y-2">
-                          <p className="text-[11px] text-amber-900 font-medium">
+                        <div className="bg-amber-50 border border-amber-200 dark:bg-amber-500/10 dark:border-amber-500/25 rounded-xl p-3 space-y-2">
+                          <p className="text-[11px] text-amber-900 dark:text-amber-200 font-medium">
                             Este pedido figura sin pago registrado. Confirmá si querés liberarlo igual a Depósito.
                           </p>
                           <div className="flex gap-2">
                             <button
                               type="button"
                               onClick={() => setRequiereConfirmSinPago(false)}
-                              className="flex-1 py-1.5 rounded-full bg-white border border-zinc-200 text-zinc-700"
+                              className="flex-1 py-1.5 rounded-full bg-white border border-zinc-200 text-zinc-700 dark:bg-[#141417] dark:border-[#2E2E35] dark:text-zinc-200"
                             >
                               Cancelar
                             </button>
@@ -655,7 +655,7 @@ export function PedidoDrawer({
                               type="button"
                               disabled={enviandoCuenta}
                               onClick={() => void handleConfirmarEnvioCuenta(true)}
-                              className="flex-1 py-1.5 rounded-full bg-zinc-900 text-white font-medium"
+                              className="flex-1 py-1.5 rounded-full bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-950 font-medium"
                             >
                               Liberar igual
                             </button>
@@ -666,7 +666,7 @@ export function PedidoDrawer({
                           type="button"
                           disabled={enviandoCuenta || !cuentaDestinoId}
                           onClick={() => void handleConfirmarEnvioCuenta(false)}
-                          className="w-full py-2 rounded-full bg-zinc-900 hover:bg-zinc-800 text-white font-medium disabled:opacity-40"
+                          className="w-full py-2 rounded-full bg-zinc-900 hover:bg-zinc-800 text-white dark:bg-zinc-100 dark:hover:bg-white dark:text-zinc-950 font-medium disabled:opacity-40"
                         >
                           {enviandoCuenta ? 'Enviando...' : 'Confirmar envío'}
                         </button>
@@ -678,12 +678,12 @@ export function PedidoDrawer({
 
               {!esDeposito && (
                 <div className="space-y-3">
-                  <h3 className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">
+                  <h3 className="text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">
                     Datos del cliente
                   </h3>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
                     <div>
-                      <label htmlFor={`drawer-cliente-${pedido.id}`} className="block text-[11px] text-zinc-500 mb-1">
+                      <label htmlFor={`drawer-cliente-${pedido.id}`} className="block text-[11px] text-zinc-500 dark:text-zinc-400 mb-1">
                         Cliente / Comercio
                       </label>
                       <input
@@ -697,11 +697,11 @@ export function PedidoDrawer({
                           if (e.key === 'Enter') e.currentTarget.blur();
                         }}
                         placeholder="Nombre del cliente o local"
-                        className="w-full px-3 py-2 bg-white border border-zinc-200 rounded-xl focus:outline-none focus:border-zinc-900"
+                        className="w-full px-3 py-2 bg-white dark:bg-[#1B1B1F] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-xl placeholder:text-zinc-400 dark:placeholder:text-zinc-500 focus:outline-none focus:border-zinc-900 dark:focus:border-[#F4B6CE]/70"
                       />
                     </div>
                     <div>
-                      <label htmlFor={`drawer-whatsapp-${pedido.id}`} className="block text-[11px] text-zinc-500 mb-1">
+                      <label htmlFor={`drawer-whatsapp-${pedido.id}`} className="block text-[11px] text-zinc-500 dark:text-zinc-400 mb-1">
                         WhatsApp
                       </label>
                       <input
@@ -715,7 +715,7 @@ export function PedidoDrawer({
                           if (e.key === 'Enter') e.currentTarget.blur();
                         }}
                         placeholder="Ej. 11-5555-1234"
-                        className="w-full px-3 py-2 bg-white border border-zinc-200 rounded-xl tabular-nums focus:outline-none focus:border-zinc-900"
+                        className="w-full px-3 py-2 bg-white dark:bg-[#1B1B1F] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-xl tabular-nums placeholder:text-zinc-400 dark:placeholder:text-zinc-500 focus:outline-none focus:border-zinc-900 dark:focus:border-[#F4B6CE]/70"
                       />
                     </div>
                   </div>
@@ -723,9 +723,9 @@ export function PedidoDrawer({
               )}
 
               {!esDeposito && (
-                <div className="pt-5 border-t border-zinc-200/70 space-y-3">
+                <div className="pt-5 border-t border-zinc-200/70 dark:border-[#26262B] space-y-3">
                   <div className="flex items-center justify-between">
-                    <h3 className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">
+                    <h3 className="text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">
                       Pagos y liquidación
                     </h3>
                     {pedido.estadoPago === 'Pagado' ? (
@@ -737,34 +737,34 @@ export function PedidoDrawer({
                     )}
                   </div>
 
-                  <div className="bg-[#FAFAFA] rounded-2xl border border-zinc-200/80 p-4 space-y-1.5 text-xs tabular-nums">
-                    <div className="flex justify-between text-zinc-500">
+                  <div className="bg-[#FAFAFA] dark:bg-[#1B1B1F] rounded-2xl border border-zinc-200/80 dark:border-[#26262B] p-4 space-y-1.5 text-xs tabular-nums">
+                    <div className="flex justify-between text-zinc-500 dark:text-zinc-400">
                       <span>Subtotal Neto</span>
                       <span>{formatARS(pedido.subtotalNeto)}</span>
                     </div>
                     {pedido.descuentoPorc > 0 && (
-                      <div className="flex justify-between text-zinc-500">
+                      <div className="flex justify-between text-zinc-500 dark:text-zinc-400">
                         <span>Descuento ({pedido.descuentoPorc}%)</span>
                         <span>-{formatARS(pedido.montoDescuento)}</span>
                       </div>
                     )}
-                    <div className="flex justify-between text-zinc-500">
+                    <div className="flex justify-between text-zinc-500 dark:text-zinc-400">
                       <span>Base Imponible (Total B)</span>
                       <span>{formatARS(pedido.baseImponible)}</span>
                     </div>
-                    <div className="flex justify-between text-zinc-500">
+                    <div className="flex justify-between text-zinc-500 dark:text-zinc-400">
                       <span>IVA 21%</span>
                       <span>{formatARS(pedido.iva21)}</span>
                     </div>
-                    <div className="flex justify-between font-semibold text-sm text-[#111111] pt-1.5 border-t border-zinc-200/70">
+                    <div className="flex justify-between font-semibold text-sm text-[#111111] dark:text-[#F4F4F5] pt-1.5 border-t border-zinc-200/70 dark:border-[#26262B]">
                       <span>Total Facturado</span>
                       <span>{formatARS(pedido.totalFacturado)}</span>
                     </div>
-                    <div className="flex justify-between text-emerald-700 font-medium">
+                    <div className="flex justify-between text-emerald-700 dark:text-emerald-400 font-medium">
                       <span>Cobrado en mano</span>
                       <span>{formatARS(pedido.montoAbonado)}</span>
                     </div>
-                    <div className="flex justify-between text-zinc-700 font-medium">
+                    <div className="flex justify-between text-zinc-700 dark:text-zinc-300 font-medium">
                       <span>Saldo pendiente</span>
                       <span>{formatARS(pedido.saldoPendiente)}</span>
                     </div>
@@ -829,8 +829,8 @@ export function PedidoDrawer({
                             }}
                             className={`py-2 px-2 rounded-xl border text-[11px] font-medium transition-colors ${
                               pedido.medioPago === m
-                                ? 'bg-zinc-900 text-white border-zinc-900'
-                                : 'bg-white text-zinc-700 border-zinc-200 hover:bg-zinc-50'
+                                ? 'bg-zinc-900 text-white border-zinc-900 dark:bg-zinc-100 dark:text-zinc-950 dark:border-zinc-100'
+                                : 'bg-white text-zinc-700 border-zinc-200 hover:bg-zinc-50 dark:bg-[#1B1B1F] dark:text-zinc-300 dark:border-[#2E2E35] dark:hover:bg-[#24242B]'
                             }`}
                           >
                             {m === 'Transferencia / Efectivo' ? 'Cobrado' : m}
@@ -840,7 +840,7 @@ export function PedidoDrawer({
 
                       <div className="grid grid-cols-2 gap-3">
                         <div>
-                          <label className="block text-[11px] text-zinc-500 mb-1">Monto abonado ($)</label>
+                          <label className="block text-[11px] text-zinc-500 dark:text-zinc-400 mb-1">Monto abonado ($)</label>
                           <input
                             type="number"
                             min={0}
@@ -866,12 +866,12 @@ export function PedidoDrawer({
                                 );
                               }
                             }}
-                            className="w-full px-3 py-2 bg-white border border-zinc-200 rounded-xl tabular-nums"
+                            className="w-full px-3 py-2 bg-white dark:bg-[#1B1B1F] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-xl tabular-nums"
                           />
                         </div>
 
                         <div>
-                          <label className="block text-[11px] text-zinc-500 mb-1">Descuento (%)</label>
+                          <label className="block text-[11px] text-zinc-500 dark:text-zinc-400 mb-1">Descuento (%)</label>
                           <input
                             type="number"
                             min={0}
@@ -894,7 +894,7 @@ export function PedidoDrawer({
                                 );
                               }
                             }}
-                            className="w-full px-3 py-2 bg-white border border-zinc-200 rounded-xl tabular-nums disabled:bg-zinc-50 disabled:text-zinc-400"
+                            className="w-full px-3 py-2 bg-white dark:bg-[#1B1B1F] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-xl tabular-nums disabled:bg-zinc-50 dark:disabled:bg-[#141417] disabled:text-zinc-400 dark:disabled:text-zinc-500"
                           />
                         </div>
                       </div>
@@ -902,7 +902,7 @@ export function PedidoDrawer({
                       {pedido.medioPago === 'Cheque' && !pedido.chequeAcreditado && (
                         <div className="grid grid-cols-2 gap-3 pt-1">
                           <div>
-                            <label className="block text-[11px] text-zinc-500 mb-1">Fecha acreditación cheque</label>
+                            <label className="block text-[11px] text-zinc-500 dark:text-zinc-400 mb-1">Fecha acreditación cheque</label>
                             <input
                               type="date"
                               value={draft.fechaAcreditacionCheque}
@@ -919,11 +919,11 @@ export function PedidoDrawer({
                                   );
                                 }
                               }}
-                              className="w-full px-3 py-2 bg-white border border-zinc-200 rounded-xl tabular-nums"
+                              className="w-full px-3 py-2 bg-white dark:bg-[#1B1B1F] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-xl tabular-nums"
                             />
                           </div>
                           <div>
-                            <label className="block text-[11px] text-zinc-500 mb-1">Detalle cheque</label>
+                            <label className="block text-[11px] text-zinc-500 dark:text-zinc-400 mb-1">Detalle cheque</label>
                             <input
                               type="text"
                               value={draft.detalleCheque}
@@ -938,14 +938,14 @@ export function PedidoDrawer({
                                   );
                                 }
                               }}
-                              className="w-full px-3 py-2 bg-white border border-zinc-200 rounded-xl"
+                              className="w-full px-3 py-2 bg-white dark:bg-[#1B1B1F] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-xl"
                             />
                           </div>
                         </div>
                       )}
                     </div>
                   ) : (
-                    <p className="text-[11px] text-zinc-400 flex items-center gap-1.5">
+                    <p className="text-[11px] text-zinc-400 dark:text-zinc-500 flex items-center gap-1.5">
                       <Lock className="w-3 h-3" strokeWidth={1.5} />
                       Los pagos y cheques solo pueden modificarse con perfil Administración.
                     </p>
@@ -953,9 +953,9 @@ export function PedidoDrawer({
                 </div>
               )}
 
-              <div className="pt-5 border-t border-zinc-200/70 space-y-3">
+              <div className="pt-5 border-t border-zinc-200/70 dark:border-[#26262B] space-y-3">
                 <div className="flex items-center justify-between gap-2">
-                  <h3 className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Armado y envío</h3>
+                  <h3 className="text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">Armado y envío</h3>
                   {draft.transporte.trim() && draft.nroSeguimiento.trim() && (
                     <button
                       type="button"
@@ -968,10 +968,10 @@ export function PedidoDrawer({
                         });
                         if (msg) onCopyText(`envio-${pedido.id}`, msg, 'Aviso de envío copiado para WhatsApp');
                       }}
-                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium bg-zinc-100 hover:bg-zinc-200/80 text-zinc-700 transition-colors"
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium bg-zinc-100 hover:bg-zinc-200/80 text-zinc-700 dark:bg-[#1B1B1F] dark:hover:bg-[#24242B] dark:text-zinc-200 transition-colors"
                     >
                       {copiadoId === `envio-${pedido.id}` ? (
-                        <Check className="w-3 h-3 text-emerald-600" strokeWidth={1.75} />
+                        <Check className="w-3 h-3 text-emerald-600 dark:text-emerald-400" strokeWidth={1.75} />
                       ) : (
                         <Send className="w-3 h-3" strokeWidth={1.5} />
                       )}
@@ -982,9 +982,9 @@ export function PedidoDrawer({
 
                 <div className="grid grid-cols-2 gap-3 text-xs">
                   <div>
-                    <label className="block text-[11px] text-zinc-500 mb-1">Estado de armado</label>
+                    <label className="block text-[11px] text-zinc-500 dark:text-zinc-400 mb-1">Estado de armado</label>
                     {pedido.faltantesVariante > 0 ? (
-                      <div className="px-3 py-2 rounded-xl bg-red-50 text-red-700 border border-red-200/70 font-medium">
+                      <div className="px-3 py-2 rounded-xl bg-red-50 text-red-700 border border-red-200/70 dark:bg-red-500/10 dark:text-red-300 dark:border-red-500/25 font-medium">
                         Falta talle o color
                       </div>
                     ) : (
@@ -994,7 +994,7 @@ export function PedidoDrawer({
                           const nuevoEstado = e.target.value as EstadoArmado;
                           void onPatch(pedido.id, { estadoArmado: nuevoEstado }, `Cambió armado a ${nuevoEstado}`);
                         }}
-                        className="w-full px-3 py-2 bg-white border border-zinc-200 rounded-xl"
+                        className="w-full px-3 py-2 bg-white dark:bg-[#1B1B1F] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-xl"
                       >
                         <option value="Por armar">Por armar</option>
                         <option value="En armado">En armado</option>
@@ -1004,14 +1004,14 @@ export function PedidoDrawer({
                   </div>
 
                   <div>
-                    <label className="block text-[11px] text-zinc-500 mb-1">Estado de envío</label>
+                    <label className="block text-[11px] text-zinc-500 dark:text-zinc-400 mb-1">Estado de envío</label>
                     <select
                       value={pedido.estadoEnvio}
                       onChange={(e) => {
                         const nuevoEnvio = e.target.value as EstadoEnvio;
                         void onPatch(pedido.id, { estadoEnvio: nuevoEnvio }, `Cambió envío a ${nuevoEnvio}`);
                       }}
-                      className="w-full px-3 py-2 bg-white border border-zinc-200 rounded-xl"
+                      className="w-full px-3 py-2 bg-white dark:bg-[#1B1B1F] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-xl"
                     >
                       <option value="Pendiente">Pendiente</option>
                       <option value="Despachado">Despachado</option>
@@ -1020,7 +1020,7 @@ export function PedidoDrawer({
                   </div>
 
                   <div>
-                    <label className="block text-[11px] text-zinc-500 mb-1">Transporte</label>
+                    <label className="block text-[11px] text-zinc-500 dark:text-zinc-400 mb-1">Transporte</label>
                     <input
                       type="text"
                       value={draft.transporte}
@@ -1032,12 +1032,12 @@ export function PedidoDrawer({
                         }
                       }}
                       placeholder="Ej. Andreani, Cruz del Sur"
-                      className="w-full px-3 py-2 bg-white border border-zinc-200 rounded-xl"
+                      className="w-full px-3 py-2 bg-white dark:bg-[#1B1B1F] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-xl placeholder:text-zinc-400 dark:placeholder:text-zinc-500"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-[11px] text-zinc-500 mb-1">N.º de seguimiento / guía</label>
+                    <label className="block text-[11px] text-zinc-500 dark:text-zinc-400 mb-1">N.º de seguimiento / guía</label>
                     <input
                       type="text"
                       value={draft.nroSeguimiento}
@@ -1053,12 +1053,12 @@ export function PedidoDrawer({
                         }
                       }}
                       placeholder="Código de guía"
-                      className="w-full px-3 py-2 bg-white border border-zinc-200 rounded-xl tabular-nums"
+                      className="w-full px-3 py-2 bg-white dark:bg-[#1B1B1F] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-xl tabular-nums placeholder:text-zinc-400 dark:placeholder:text-zinc-500"
                     />
                   </div>
 
                   <div className="col-span-2">
-                    <label className="block text-[11px] text-zinc-500 mb-1">Observaciones</label>
+                    <label className="block text-[11px] text-zinc-500 dark:text-zinc-400 mb-1">Observaciones</label>
                     <textarea
                       rows={2}
                       value={draft.observaciones}
@@ -1069,7 +1069,7 @@ export function PedidoDrawer({
                           void onPatch(pedido.id, { observaciones: val }, 'Actualizó observaciones');
                         }
                       }}
-                      className="w-full px-3 py-2 bg-white border border-zinc-200 rounded-xl"
+                      className="w-full px-3 py-2 bg-white dark:bg-[#1B1B1F] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-xl"
                     />
                   </div>
                 </div>
@@ -1080,14 +1080,14 @@ export function PedidoDrawer({
                       <button
                         type="button"
                         onClick={() => setMostrarIncidenciaForm(true)}
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-amber-50 border border-amber-200 text-amber-800 hover:bg-amber-100/80"
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-amber-50 border border-amber-200 text-amber-800 hover:bg-amber-100/80 dark:bg-amber-500/[0.12] dark:border-amber-500/25 dark:text-amber-300 dark:hover:bg-amber-500/20"
                       >
                         <AlertTriangle className="w-3.5 h-3.5" strokeWidth={1.5} />
                         Reportar faltante / problema
                       </button>
                     ) : (
-                      <div className="bg-amber-50/70 border border-amber-200 rounded-xl p-3 space-y-2 text-xs">
-                        <label className="block text-[11px] font-medium text-amber-900">
+                      <div className="bg-amber-50/70 border border-amber-200 dark:bg-amber-500/10 dark:border-amber-500/25 rounded-xl p-3 space-y-2 text-xs">
+                        <label className="block text-[11px] font-medium text-amber-900 dark:text-amber-200">
                           Detalle para Administración
                         </label>
                         <textarea
@@ -1095,13 +1095,13 @@ export function PedidoDrawer({
                           value={incidenciaTexto}
                           onChange={(e) => setIncidenciaTexto(e.target.value)}
                           placeholder="Ej. Faltan 2 Chalecos Shark T1 en estantería..."
-                          className="w-full px-3 py-2 bg-white border border-amber-200 rounded-lg"
+                          className="w-full px-3 py-2 bg-white dark:bg-[#1B1B1F] dark:text-[#F4F4F5] border border-amber-200 dark:border-amber-500/30 rounded-lg placeholder:text-zinc-400 dark:placeholder:text-zinc-500"
                         />
                         <div className="flex justify-end gap-2">
                           <button
                             type="button"
                             onClick={() => setMostrarIncidenciaForm(false)}
-                            className="px-3 py-1.5 rounded-full bg-white border border-zinc-200 text-zinc-600"
+                            className="px-3 py-1.5 rounded-full bg-white border border-zinc-200 text-zinc-600 dark:bg-[#1B1B1F] dark:border-[#2E2E35] dark:text-zinc-300"
                           >
                             Cancelar
                           </button>
@@ -1109,7 +1109,7 @@ export function PedidoDrawer({
                             type="button"
                             disabled={enviandoIncidencia}
                             onClick={() => void handleEnviarIncidencia()}
-                            className="px-3.5 py-1.5 rounded-full bg-zinc-900 text-white font-medium"
+                            className="px-3.5 py-1.5 rounded-full bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-950 font-medium"
                           >
                             {enviandoIncidencia ? 'Enviando...' : 'Enviar aviso'}
                           </button>
@@ -1121,16 +1121,16 @@ export function PedidoDrawer({
               </div>
 
               {pedido.lineas.length > 0 && (
-                <div className="pt-5 border-t border-zinc-200/70 space-y-2.5">
-                  <h3 className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">
+                <div className="pt-5 border-t border-zinc-200/70 dark:border-[#26262B] space-y-2.5">
+                  <h3 className="text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">
                     Detalle de artículos ({pedido.lineas.length} · {totalUnidades} u.)
                   </h3>
-                  <div className="divide-y divide-zinc-200/60 border border-zinc-200/80 rounded-xl">
+                  <div className="divide-y divide-zinc-200/60 dark:divide-[#26262B]/80 border border-zinc-200/80 dark:border-[#26262B] rounded-xl">
                     {pedido.lineas.map((l) => (
                       <div key={l.idLinea} className="px-3.5 py-2.5 text-xs flex justify-between gap-2">
                         <div>
-                          <div className="font-medium text-[#111111]">{l.nombreProducto}</div>
-                          <div className="text-[11px] text-zinc-400 tabular-nums">
+                          <div className="font-medium text-[#111111] dark:text-[#F4F4F5]">{l.nombreProducto}</div>
+                          <div className="text-[11px] text-zinc-400 dark:text-zinc-500 tabular-nums">
                             {l.requiereRevision
                               ? `Sin definir (${l.cantidadTotal} u.)`
                               : l.desglose
@@ -1139,7 +1139,7 @@ export function PedidoDrawer({
                                   .join(' | ')}
                           </div>
                         </div>
-                        <div className="font-semibold tabular-nums whitespace-nowrap">
+                        <div className="font-semibold text-[#111111] dark:text-[#F4F4F5] tabular-nums whitespace-nowrap">
                           {esDeposito
                             ? `${l.cantidadTotal} u.`
                             : formatARS(round2(l.precioUnitarioNeto * l.cantidadTotal))}
@@ -1150,16 +1150,16 @@ export function PedidoDrawer({
                 </div>
               )}
 
-              <div className="pt-5 border-t border-zinc-200/70 space-y-2.5">
-                <h3 className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">
+              <div className="pt-5 border-t border-zinc-200/70 dark:border-[#26262B] space-y-2.5">
+                <h3 className="text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">
                   Historial de cambios
                 </h3>
-                <ul className="space-y-1.5 text-[11px] text-zinc-500">
+                <ul className="space-y-1.5 text-[11px] text-zinc-500 dark:text-zinc-400">
                   {pedido.historial.map((h, i) => (
                     <li key={i} className="flex items-start gap-2">
-                      <Clock className="w-3 h-3 text-zinc-400 mt-0.5 shrink-0" strokeWidth={1.5} />
+                      <Clock className="w-3 h-3 text-zinc-400 dark:text-zinc-500 mt-0.5 shrink-0" strokeWidth={1.5} />
                       <span>
-                        <strong className="text-zinc-700 font-medium">{h.fechaHora}</strong> · {h.usuario} ({h.rol}):{' '}
+                        <strong className="text-zinc-700 dark:text-zinc-200 font-medium">{h.fechaHora}</strong> · {h.usuario} ({h.rol}):{' '}
                         {h.accion}
                       </span>
                     </li>
@@ -1168,13 +1168,13 @@ export function PedidoDrawer({
               </div>
 
               {esAdmin && (
-                <div className="pt-5 border-t border-zinc-200/70 flex justify-end">
+                <div className="pt-5 border-t border-zinc-200/70 dark:border-[#26262B] flex justify-end">
                   {confirmEliminar ? (
                     <div className="flex items-center gap-2">
                       <button
                         type="button"
                         onClick={() => setConfirmEliminar(false)}
-                        className="px-3 py-1.5 rounded-full text-xs border border-zinc-200 text-zinc-600"
+                        className="px-3 py-1.5 rounded-full text-xs border border-zinc-200 dark:border-[#2E2E35] text-zinc-600 dark:text-zinc-300"
                       >
                         Cancelar
                       </button>
@@ -1190,7 +1190,7 @@ export function PedidoDrawer({
                     <button
                       type="button"
                       onClick={() => setConfirmEliminar(true)}
-                      className="inline-flex items-center gap-1.5 text-xs text-red-600 hover:text-red-700"
+                      className="inline-flex items-center gap-1.5 text-xs text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300"
                     >
                       <Trash2 className="w-3.5 h-3.5" strokeWidth={1.5} />
                       Eliminar pedido

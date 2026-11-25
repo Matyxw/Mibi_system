@@ -11,19 +11,41 @@ export function MibiLogo({
   width?: number;
   variant?: LogoVariant;
 }): React.JSX.Element {
-  const src =
-    variant === 'pink'
-      ? '/mibi-logo-pink.png'
-      : variant === 'white'
-        ? '/mibi-logo-white.png'
-        : '/mibi-logo-ink.png';
+  const height = Math.round(width * (210 / 480));
+
+  if (variant === 'ink') {
+    return (
+      <>
+        <img
+          src="/mibi-logo-ink.png"
+          alt="Mibi®"
+          width={width}
+          height={height}
+          style={{ width, height: 'auto' }}
+          className="block dark:hidden select-none object-contain"
+          draggable={false}
+        />
+        <img
+          src="/mibi-logo-white.png"
+          alt="Mibi®"
+          width={width}
+          height={height}
+          style={{ width, height: 'auto' }}
+          className="hidden dark:block select-none object-contain"
+          draggable={false}
+        />
+      </>
+    );
+  }
+
+  const src = variant === 'pink' ? '/mibi-logo-pink.png' : '/mibi-logo-white.png';
 
   return (
     <img
       src={src}
       alt="Mibi®"
       width={width}
-      height={Math.round(width * (210 / 480))}
+      height={height}
       style={{ width, height: 'auto' }}
       className="block select-none object-contain"
       draggable={false}

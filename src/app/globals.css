@@ -2,20 +2,41 @@
 @tailwind components;
 @tailwind utilities;
 
+html {
+  color-scheme: light;
+}
+
+html.dark {
+  color-scheme: dark;
+}
+
 @media print {
+  html,
+  html.dark,
+  body {
+    color-scheme: light !important;
+    background: #ffffff !important;
+    color: #111111 !important;
+  }
   body * {
     visibility: hidden;
   }
   .mibi-print-area,
   .mibi-print-area * {
     visibility: visible;
+    color-scheme: light !important;
+  }
+  .mibi-print-area .no-print {
+    display: none !important;
   }
   .mibi-print-area {
     position: absolute;
     left: 0;
     top: 0;
     width: 100%;
-    background: #ffffff;
+    background: #ffffff !important;
+    color: #111111 !important;
+    border-color: #d4d4d8 !important;
     padding: 24px;
   }
 }

@@ -108,46 +108,46 @@ export function FloatingBatchBar({
     <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 max-w-[96vw]">
       <div className="relative">
         {batchPanel === 'estado' && (
-          <div className="absolute bottom-full mb-2.5 left-1/2 -translate-x-1/2 w-80 bg-white text-[#111111] rounded-2xl border border-[#EAEAEA] shadow-[0_12px_36px_rgba(0,0,0,0.12)] p-4 space-y-3.5">
+          <div className="absolute bottom-full mb-2.5 left-1/2 -translate-x-1/2 w-80 bg-white dark:bg-[#18181D] text-[#111111] dark:text-[#F4F4F5] rounded-2xl border border-[#EAEAEA] dark:border-[#2E2E36] shadow-[0_12px_36px_rgba(0,0,0,0.12)] dark:shadow-[0_12px_36px_rgba(0,0,0,0.55)] p-4 space-y-3.5">
             <div className="flex items-center justify-between">
-              <span className="text-xs font-semibold text-[#111111]">Armado y envío en lote</span>
+              <span className="text-xs font-semibold text-[#111111] dark:text-[#F4F4F5]">Armado y envío en lote</span>
               <button
                 type="button"
                 onClick={() => setBatchPanel(null)}
-                className="p-1 rounded-full text-zinc-400 hover:text-zinc-800"
+                className="p-1 rounded-full text-zinc-400 hover:text-zinc-800 dark:hover:text-[#F4F4F5]"
               >
                 <X className="w-3.5 h-3.5" strokeWidth={1.5} />
               </button>
             </div>
 
             <div className="space-y-1.5">
-              <span className="text-[11px] text-zinc-400 font-medium">Cambiar armado</span>
+              <span className="text-[11px] text-zinc-400 dark:text-zinc-500 font-medium">Cambiar armado</span>
               <div className="grid grid-cols-2 gap-1.5">
                 <button
                   type="button"
                   onClick={() => onBatchArmado('En armado')}
-                  className="px-3 py-2 rounded-xl text-xs font-medium bg-zinc-50 hover:bg-zinc-100 border border-zinc-200 text-zinc-800 transition-colors"
+                  className="px-3 py-2 rounded-xl text-xs font-medium bg-zinc-50 hover:bg-zinc-100 border border-zinc-200 text-zinc-800 dark:bg-[#1B1B1F] dark:hover:bg-[#24242B] dark:border-[#2E2E35] dark:text-zinc-200 transition-colors"
                 >
                   En armado
                 </button>
                 <button
                   type="button"
                   onClick={() => onBatchArmado('Listo')}
-                  className="px-3 py-2 rounded-xl text-xs font-medium bg-emerald-50 hover:bg-emerald-100/80 border border-emerald-200/70 text-emerald-800 transition-colors"
+                  className="px-3 py-2 rounded-xl text-xs font-medium bg-emerald-50 hover:bg-emerald-100/80 border border-emerald-200/70 text-emerald-800 dark:bg-emerald-500/[0.12] dark:hover:bg-emerald-500/20 dark:border-emerald-500/25 dark:text-emerald-300 transition-colors"
                 >
                   Listo para armar
                 </button>
               </div>
             </div>
 
-            <div className="pt-3 border-t border-zinc-200/70 space-y-2">
-              <span className="text-[11px] text-zinc-400 font-medium">Despacho y transporte</span>
+            <div className="pt-3 border-t border-zinc-200/70 dark:border-[#26262B] space-y-2">
+              <span className="text-[11px] text-zinc-400 dark:text-zinc-500 font-medium">Despacho y transporte</span>
               <input
                 type="text"
                 value={batchTransporte}
                 onChange={(e) => setBatchTransporte(e.target.value)}
                 placeholder="Transporte opcional (ej. Andreani, Cruz del Sur)"
-                className="w-full px-3 py-2 text-xs bg-white border border-zinc-200 rounded-xl focus:outline-none focus:border-zinc-900"
+                className="w-full px-3 py-2 text-xs bg-white dark:bg-[#1B1B1F] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-xl placeholder:text-zinc-400 dark:placeholder:text-zinc-500 focus:outline-none focus:border-zinc-900 dark:focus:border-[#F4B6CE]/70"
               />
               <div className="grid grid-cols-2 gap-1.5">
                 <button
@@ -156,7 +156,7 @@ export function FloatingBatchBar({
                     onBatchEnvio('Despachado', batchTransporte);
                     setBatchTransporte('');
                   }}
-                  className="px-3 py-2 rounded-xl text-xs font-medium bg-zinc-900 hover:bg-zinc-800 text-white transition-colors"
+                  className="px-3 py-2 rounded-xl text-xs font-medium bg-zinc-900 hover:bg-zinc-800 text-white dark:bg-zinc-100 dark:hover:bg-white dark:text-zinc-950 transition-colors"
                 >
                   Marcar Despachado
                 </button>
@@ -166,7 +166,7 @@ export function FloatingBatchBar({
                     onBatchEnvio('Entregado', batchTransporte);
                     setBatchTransporte('');
                   }}
-                  className="px-3 py-2 rounded-xl text-xs font-medium bg-white hover:bg-zinc-50 border border-zinc-200 text-zinc-700 transition-colors"
+                  className="px-3 py-2 rounded-xl text-xs font-medium bg-white hover:bg-zinc-50 border border-zinc-200 text-zinc-700 dark:bg-[#1B1B1F] dark:hover:bg-[#24242B] dark:border-[#2E2E35] dark:text-zinc-200 transition-colors"
                 >
                   Marcar Entregado
                 </button>
@@ -176,9 +176,9 @@ export function FloatingBatchBar({
         )}
 
         {batchPanel === 'enviar' && esAdmin && (
-          <div className="absolute bottom-full mb-2.5 left-1/2 -translate-x-1/2 w-80 bg-white text-[#111111] rounded-2xl border border-[#EAEAEA] shadow-[0_12px_36px_rgba(0,0,0,0.12)] p-4 space-y-3 text-xs">
+          <div className="absolute bottom-full mb-2.5 left-1/2 -translate-x-1/2 w-80 bg-white dark:bg-[#18181D] text-[#111111] dark:text-[#F4F4F5] rounded-2xl border border-[#EAEAEA] dark:border-[#2E2E36] shadow-[0_12px_36px_rgba(0,0,0,0.12)] dark:shadow-[0_12px_36px_rgba(0,0,0,0.55)] p-4 space-y-3 text-xs">
             <div className="flex items-center justify-between">
-              <span className="font-semibold text-[#111111]">
+              <span className="font-semibold text-[#111111] dark:text-[#F4F4F5]">
                 Enviar {selectedCount} {selectedCount === 1 ? 'pedido' : 'pedidos'} a cuenta
               </span>
               <button
@@ -187,21 +187,21 @@ export function FloatingBatchBar({
                   setConfirmSinPago(null);
                   setBatchPanel(null);
                 }}
-                className="p-1 rounded-full text-zinc-400 hover:text-zinc-800"
+                className="p-1 rounded-full text-zinc-400 hover:text-zinc-800 dark:hover:text-[#F4F4F5]"
               >
                 <X className="w-3.5 h-3.5" strokeWidth={1.5} />
               </button>
             </div>
 
             <div>
-              <label className="block text-[11px] text-zinc-500 mb-1">Cuenta destino</label>
+              <label className="block text-[11px] text-zinc-500 dark:text-zinc-400 mb-1">Cuenta destino</label>
               <select
                 value={cuentaId}
                 onChange={(e) => {
                   setCuentaId(e.target.value);
                   setConfirmSinPago(null);
                 }}
-                className="w-full px-3 py-2 bg-white border border-zinc-200 rounded-xl"
+                className="w-full px-3 py-2 bg-white dark:bg-[#1B1B1F] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-xl"
               >
                 <option value="">Elegir cuenta...</option>
                 {cuentasDeposito.length > 0 && (
@@ -227,39 +227,39 @@ export function FloatingBatchBar({
 
             <div className="grid grid-cols-2 gap-2">
               <div>
-                <label className="block text-[11px] text-zinc-500 mb-1">Prioridad</label>
+                <label className="block text-[11px] text-zinc-500 dark:text-zinc-400 mb-1">Prioridad</label>
                 <select
                   value={prioridad}
                   onChange={(e) => setPrioridad(e.target.value as PrioridadAsignacion)}
-                  className="w-full px-3 py-2 bg-white border border-zinc-200 rounded-xl"
+                  className="w-full px-3 py-2 bg-white dark:bg-[#1B1B1F] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-xl"
                 >
                   <option value="NORMAL">Normal</option>
                   <option value="URGENTE">Urgente</option>
                 </select>
               </div>
               <div>
-                <label className="block text-[11px] text-zinc-500 mb-1">Nota (opc.)</label>
+                <label className="block text-[11px] text-zinc-500 dark:text-zinc-400 mb-1">Nota (opc.)</label>
                 <input
                   type="text"
                   maxLength={300}
                   value={notaEnvio}
                   onChange={(e) => setNotaEnvio(e.target.value)}
                   placeholder="Ej. Sale hoy"
-                  className="w-full px-3 py-2 bg-white border border-zinc-200 rounded-xl"
+                  className="w-full px-3 py-2 bg-white dark:bg-[#1B1B1F] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-xl placeholder:text-zinc-400 dark:placeholder:text-zinc-500"
                 />
               </div>
             </div>
 
             {confirmSinPago ? (
-              <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 space-y-2">
-                <p className="text-[11px] text-amber-900">
+              <div className="bg-amber-50 border border-amber-200 dark:bg-amber-500/10 dark:border-amber-500/25 rounded-xl p-3 space-y-2">
+                <p className="text-[11px] text-amber-900 dark:text-amber-200">
                   Hay pedido(s) sin pago registrado ({confirmSinPago.join(', ')}). Confirmá si querés liberarlos igual a Depósito.
                 </p>
                 <div className="flex gap-2">
                   <button
                     type="button"
                     onClick={() => setConfirmSinPago(null)}
-                    className="flex-1 py-1.5 rounded-full bg-white border border-zinc-200 text-zinc-700"
+                    className="flex-1 py-1.5 rounded-full bg-white border border-zinc-200 text-zinc-700 dark:bg-[#1B1B1F] dark:border-[#2E2E35] dark:text-zinc-200"
                   >
                     Cancelar
                   </button>
@@ -267,7 +267,7 @@ export function FloatingBatchBar({
                     type="button"
                     disabled={enviando}
                     onClick={() => void ejecutarEnvioLote(true)}
-                    className="flex-1 py-1.5 rounded-full bg-zinc-900 text-white font-medium"
+                    className="flex-1 py-1.5 rounded-full bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-950 font-medium"
                   >
                     Liberar igual
                   </button>
@@ -278,7 +278,7 @@ export function FloatingBatchBar({
                 type="button"
                 disabled={enviando || !cuentaId}
                 onClick={() => void ejecutarEnvioLote(false)}
-                className="w-full py-2 rounded-full bg-zinc-900 hover:bg-zinc-800 text-white font-medium disabled:opacity-40"
+                className="w-full py-2 rounded-full bg-zinc-900 hover:bg-zinc-800 text-white dark:bg-zinc-100 dark:hover:bg-white dark:text-zinc-950 font-medium disabled:opacity-40"
               >
                 {enviando ? 'Enviando...' : 'Enviar seleccionados'}
               </button>
@@ -287,20 +287,20 @@ export function FloatingBatchBar({
         )}
 
         {batchPanel === 'pago' && esAdmin && (
-          <div className="absolute bottom-full mb-2.5 left-1/2 -translate-x-1/2 w-80 bg-white text-[#111111] rounded-2xl border border-[#EAEAEA] shadow-[0_12px_36px_rgba(0,0,0,0.12)] p-4 space-y-3.5">
+          <div className="absolute bottom-full mb-2.5 left-1/2 -translate-x-1/2 w-80 bg-white dark:bg-[#18181D] text-[#111111] dark:text-[#F4F4F5] rounded-2xl border border-[#EAEAEA] dark:border-[#2E2E36] shadow-[0_12px_36px_rgba(0,0,0,0.12)] dark:shadow-[0_12px_36px_rgba(0,0,0,0.55)] p-4 space-y-3.5">
             <div className="flex items-center justify-between">
-              <span className="text-xs font-semibold text-[#111111]">Pago y vendedor en lote</span>
+              <span className="text-xs font-semibold text-[#111111] dark:text-[#F4F4F5]">Pago y vendedor en lote</span>
               <button
                 type="button"
                 onClick={() => setBatchPanel(null)}
-                className="p-1 rounded-full text-zinc-400 hover:text-zinc-800"
+                className="p-1 rounded-full text-zinc-400 hover:text-zinc-800 dark:hover:text-[#F4F4F5]"
               >
                 <X className="w-3.5 h-3.5" strokeWidth={1.5} />
               </button>
             </div>
 
             <div className="space-y-1.5">
-              <span className="text-[11px] text-zinc-400 font-medium">Estado financiero (Administración)</span>
+              <span className="text-[11px] text-zinc-400 dark:text-zinc-500 font-medium">Estado financiero (Administración)</span>
               <button
                 type="button"
                 onClick={() => onBatchPago('Pagado')}
@@ -311,19 +311,19 @@ export function FloatingBatchBar({
               <button
                 type="button"
                 onClick={() => onBatchPago('Falta pago')}
-                className="w-full px-3 py-2 rounded-xl text-xs font-medium bg-white hover:bg-red-50 border border-zinc-200 text-zinc-700 hover:text-red-700 transition-colors"
+                className="w-full px-3 py-2 rounded-xl text-xs font-medium bg-white hover:bg-red-50 border border-zinc-200 text-zinc-700 hover:text-red-700 dark:bg-[#1B1B1F] dark:border-[#2E2E35] dark:text-zinc-200 dark:hover:bg-red-500/15 dark:hover:text-red-300 transition-colors"
               >
                 Pasar a Falta pago
               </button>
             </div>
 
-            <div className="pt-3 border-t border-zinc-200/70 space-y-2">
-              <span className="text-[11px] text-zinc-400 font-medium">Asignar vendedor al lote</span>
+            <div className="pt-3 border-t border-zinc-200/70 dark:border-[#26262B] space-y-2">
+              <span className="text-[11px] text-zinc-400 dark:text-zinc-500 font-medium">Asignar vendedor al lote</span>
               <div className="flex items-center gap-1.5">
                 <select
                   value={batchVendedor}
                   onChange={(e) => setBatchVendedor(e.target.value)}
-                  className="flex-1 px-3 py-2 text-xs bg-white border border-zinc-200 rounded-xl focus:outline-none focus:border-zinc-900"
+                  className="flex-1 px-3 py-2 text-xs bg-white dark:bg-[#1B1B1F] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-xl focus:outline-none focus:border-zinc-900 dark:focus:border-[#F4B6CE]/70"
                 >
                   {VENDEDORES_MIBI.map((v) => (
                     <option key={v} value={v}>
@@ -334,7 +334,7 @@ export function FloatingBatchBar({
                 <button
                   type="button"
                   onClick={() => onBatchVendedor(batchVendedor)}
-                  className="px-3.5 py-2 rounded-xl text-xs font-medium bg-zinc-900 hover:bg-zinc-800 text-white"
+                  className="px-3.5 py-2 rounded-xl text-xs font-medium bg-zinc-900 hover:bg-zinc-800 text-white dark:bg-zinc-100 dark:hover:bg-white dark:text-zinc-950"
                 >
                   Aplicar
                 </button>
@@ -344,16 +344,16 @@ export function FloatingBatchBar({
         )}
 
         {batchPanel === 'exportar' && !esDeposito && (
-          <div className="absolute bottom-full mb-2.5 left-1/2 -translate-x-1/2 w-80 bg-white text-[#111111] rounded-2xl border border-[#EAEAEA] shadow-[0_12px_36px_rgba(0,0,0,0.12)] p-4 space-y-2.5">
+          <div className="absolute bottom-full mb-2.5 left-1/2 -translate-x-1/2 w-80 bg-white dark:bg-[#18181D] text-[#111111] dark:text-[#F4F4F5] rounded-2xl border border-[#EAEAEA] dark:border-[#2E2E36] shadow-[0_12px_36px_rgba(0,0,0,0.12)] dark:shadow-[0_12px_36px_rgba(0,0,0,0.55)] p-4 space-y-2.5">
             <div className="flex items-center justify-between pb-1">
-              <span className="text-xs font-semibold text-[#111111]">
+              <span className="text-xs font-semibold text-[#111111] dark:text-[#F4F4F5]">
                 Exportar {pedidosSeleccionados.length}{' '}
                 {pedidosSeleccionados.length === 1 ? 'seleccionado' : 'seleccionados'}
               </span>
               <button
                 type="button"
                 onClick={() => setBatchPanel(null)}
-                className="p-1 rounded-full text-zinc-400 hover:text-zinc-800"
+                className="p-1 rounded-full text-zinc-400 hover:text-zinc-800 dark:hover:text-[#F4F4F5]"
               >
                 <X className="w-3.5 h-3.5" strokeWidth={1.5} />
               </button>
@@ -363,13 +363,13 @@ export function FloatingBatchBar({
               <button
                 type="button"
                 onClick={onExportTableroSeleccionados}
-                className="w-full text-left px-3.5 py-2.5 rounded-xl border border-zinc-200 hover:bg-zinc-50 transition-colors"
+                className="w-full text-left px-3.5 py-2.5 rounded-xl border border-zinc-200 dark:border-[#2E2E35] dark:bg-[#1B1B1F] hover:bg-zinc-50 dark:hover:bg-[#24242B] transition-colors"
               >
-                <div className="text-xs font-semibold text-[#111111] flex items-center gap-1.5">
-                  <FileSpreadsheet className="w-3.5 h-3.5 text-zinc-500" strokeWidth={1.5} />
+                <div className="text-xs font-semibold text-[#111111] dark:text-[#F4F4F5] flex items-center gap-1.5">
+                  <FileSpreadsheet className="w-3.5 h-3.5 text-zinc-500 dark:text-zinc-400" strokeWidth={1.5} />
                   Excel General (Seleccionados)
                 </div>
-                <p className="text-[11px] text-zinc-500 mt-0.5">
+                <p className="text-[11px] text-zinc-500 dark:text-zinc-400 mt-0.5">
                   Planilla oficial de 17 columnas solo con los tildados.
                 </p>
               </button>
@@ -378,13 +378,13 @@ export function FloatingBatchBar({
             <button
               type="button"
               onClick={onExportPickingConsolidado}
-              className="w-full text-left px-3.5 py-2.5 rounded-xl border border-zinc-900 bg-zinc-900 text-white hover:bg-zinc-800 transition-colors"
+              className="w-full text-left px-3.5 py-2.5 rounded-xl border border-zinc-900 bg-zinc-900 text-white hover:bg-zinc-800 dark:border-[#34343D] dark:bg-[#22222A] dark:hover:bg-[#2A2A34] transition-colors"
             >
               <div className="text-xs font-semibold flex items-center gap-1.5">
                 <Layers className="w-3.5 h-3.5 text-[#F4B6CE]" strokeWidth={1.5} />
                 Consolidado para Depósito (Picking)
               </div>
-              <p className="text-[11px] text-zinc-300 mt-0.5">
+              <p className="text-[11px] text-zinc-300 dark:text-zinc-400 mt-0.5">
                 Suma unidades totales por código + pestaña por cliente.
               </p>
             </button>
@@ -392,20 +392,20 @@ export function FloatingBatchBar({
         )}
 
         {batchPanel === 'eliminar' && esAdmin && (
-          <div className="absolute bottom-full mb-2.5 right-0 w-72 bg-white text-[#111111] rounded-2xl border border-red-200/80 shadow-[0_12px_36px_rgba(0,0,0,0.12)] p-4 space-y-3">
-            <div className="text-xs font-semibold text-red-700">
+          <div className="absolute bottom-full mb-2.5 right-0 w-72 bg-white dark:bg-[#18181D] text-[#111111] dark:text-[#F4F4F5] rounded-2xl border border-red-200/80 dark:border-red-500/30 shadow-[0_12px_36px_rgba(0,0,0,0.12)] dark:shadow-[0_12px_36px_rgba(0,0,0,0.55)] p-4 space-y-3">
+            <div className="text-xs font-semibold text-red-700 dark:text-red-400">
               ¿Eliminar {pedidosSeleccionados.length}{' '}
               {pedidosSeleccionados.length === 1 ? 'pedido' : 'pedidos'}?
             </div>
-            <p className="text-[11px] text-zinc-500 tabular-nums">
-              Total involucrado: <strong className="text-[#111111]">{formatARS(totalSeleccionado)}</strong>. Tendrás
+            <p className="text-[11px] text-zinc-500 dark:text-zinc-400 tabular-nums">
+              Total involucrado: <strong className="text-[#111111] dark:text-[#F4F4F5]">{formatARS(totalSeleccionado)}</strong>. Tendrás
               6 segundos para deshacer si fue por error.
             </p>
             <div className="flex items-center gap-2">
               <button
                 type="button"
                 onClick={() => setBatchPanel(null)}
-                className="flex-1 py-2 rounded-full text-xs font-medium bg-white border border-zinc-200 text-zinc-700 hover:bg-zinc-50"
+                className="flex-1 py-2 rounded-full text-xs font-medium bg-white border border-zinc-200 text-zinc-700 hover:bg-zinc-50 dark:bg-[#1B1B1F] dark:border-[#2E2E35] dark:text-zinc-200 dark:hover:bg-[#24242B]"
               >
                 Cancelar
               </button>
@@ -420,7 +420,7 @@ export function FloatingBatchBar({
           </div>
         )}
 
-        <div className="bg-zinc-900 text-white rounded-full shadow-lg px-3.5 py-2 flex items-center gap-2 sm:gap-3 border border-zinc-800">
+        <div className="bg-zinc-900 dark:bg-[#1C1C22] text-white rounded-full shadow-lg dark:shadow-[0_12px_36px_rgba(0,0,0,0.55)] px-3.5 py-2 flex items-center gap-2 sm:gap-3 border border-zinc-800 dark:border-[#34343D]">
           <div className="flex items-center gap-2 pl-1 whitespace-nowrap">
             <span className="inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full bg-[#F4B6CE] text-[#111111] text-[11px] font-bold tabular-nums">
               {selectedCount}
@@ -440,7 +440,9 @@ export function FloatingBatchBar({
               type="button"
               onClick={() => setBatchPanel((prev) => (prev === 'estado' ? null : 'estado'))}
               className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-xs font-medium transition-colors ${
-                batchPanel === 'estado' ? 'bg-white text-[#111111]' : 'text-zinc-200 hover:bg-zinc-800'
+                batchPanel === 'estado'
+                  ? 'bg-white text-[#111111] dark:bg-zinc-100 dark:text-zinc-950'
+                  : 'text-zinc-200 hover:bg-zinc-800 dark:hover:bg-[#2A2A34]'
               }`}
             >
               <Truck className="w-3.5 h-3.5" strokeWidth={1.5} />
@@ -451,7 +453,7 @@ export function FloatingBatchBar({
               <button
                 type="button"
                 onClick={onExportPickingConsolidado}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium text-zinc-200 hover:bg-zinc-800 transition-colors"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium text-zinc-200 hover:bg-zinc-800 dark:hover:bg-[#2A2A34] transition-colors"
               >
                 <Layers className="w-3.5 h-3.5 text-[#F4B6CE]" strokeWidth={1.5} />
                 <span>Picking Consolidado</span>
@@ -466,7 +468,9 @@ export function FloatingBatchBar({
                       setBatchPanel((prev) => (prev === 'enviar' ? null : 'enviar'));
                     }}
                     className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-xs font-medium transition-colors ${
-                      batchPanel === 'enviar' ? 'bg-white text-[#111111]' : 'text-zinc-200 hover:bg-zinc-800'
+                      batchPanel === 'enviar'
+                        ? 'bg-white text-[#111111] dark:bg-zinc-100 dark:text-zinc-950'
+                        : 'text-zinc-200 hover:bg-zinc-800 dark:hover:bg-[#2A2A34]'
                     }`}
                   >
                     <Send className="w-3.5 h-3.5" strokeWidth={1.5} />
@@ -479,7 +483,9 @@ export function FloatingBatchBar({
                     type="button"
                     onClick={() => setBatchPanel((prev) => (prev === 'pago' ? null : 'pago'))}
                     className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-xs font-medium transition-colors ${
-                      batchPanel === 'pago' ? 'bg-white text-[#111111]' : 'text-zinc-200 hover:bg-zinc-800'
+                      batchPanel === 'pago'
+                        ? 'bg-white text-[#111111] dark:bg-zinc-100 dark:text-zinc-950'
+                        : 'text-zinc-200 hover:bg-zinc-800 dark:hover:bg-[#2A2A34]'
                     }`}
                   >
                     <CreditCard className="w-3.5 h-3.5" strokeWidth={1.5} />
@@ -499,7 +505,9 @@ export function FloatingBatchBar({
                   type="button"
                   onClick={() => setBatchPanel((prev) => (prev === 'exportar' ? null : 'exportar'))}
                   className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-xs font-medium transition-colors ${
-                    batchPanel === 'exportar' ? 'bg-white text-[#111111]' : 'text-zinc-200 hover:bg-zinc-800'
+                    batchPanel === 'exportar'
+                      ? 'bg-white text-[#111111] dark:bg-zinc-100 dark:text-zinc-950'
+                      : 'text-zinc-200 hover:bg-zinc-800 dark:hover:bg-[#2A2A34]'
                   }`}
                 >
                   <Download className="w-3.5 h-3.5" strokeWidth={1.5} />

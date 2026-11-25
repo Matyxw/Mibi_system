@@ -33,6 +33,7 @@ import {
 } from '@/app/actions/pedidos-actions';
 import { listarCuentasAsignablesAction } from '@/app/actions/usuarios-actions';
 import { CATALOGO_MIBI, MIBI_BRAND } from '@/lib/catalogo-mibi';
+import { ThemeToggle } from './theme-toggle';
 import type { EnviarCuentasResult, SyncStatusResult } from '@/lib/dal/pedidos';
 import { aplicarResolucionLinea } from '@/lib/excel-parser';
 import {
@@ -1063,7 +1064,7 @@ export function ErpShell({
       ];
 
   return (
-    <div className="min-h-screen bg-[#FAFAFA] text-[#111111] flex flex-col">
+    <div className="min-h-screen bg-[#FAFAFA] text-[#111111] dark:bg-[#0B0B0D] dark:text-[#F4F4F5] flex flex-col">
       <input
         ref={fileInputGeneralRef}
         type="file"
@@ -1082,7 +1083,7 @@ export function ErpShell({
             (vista === 'pedidos' && selectedIds.size > 0) || pendingUndoDelete ? 'bottom-24' : 'bottom-6'
           }`}
         >
-          <div className="flex items-center gap-2 px-4 py-2.5 rounded-full bg-[#111111] text-white text-xs font-medium shadow-[0_4px_16px_rgba(0,0,0,0.12)]">
+          <div className="flex items-center gap-2 px-4 py-2.5 rounded-full bg-[#111111] dark:bg-[#1C1C22] text-white dark:border dark:border-[#34343D] text-xs font-medium shadow-[0_4px_16px_rgba(0,0,0,0.12)] dark:shadow-[0_12px_36px_rgba(0,0,0,0.55)]">
             <span
               className={`w-1.5 h-1.5 rounded-full ${
                 toast.tone === 'green'
@@ -1101,7 +1102,7 @@ export function ErpShell({
 
       {pendingUndoDelete && (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50">
-          <div className="flex items-center gap-3 pl-4 pr-2 py-2 rounded-full bg-zinc-900 text-white text-xs font-medium shadow-lg border border-zinc-800">
+          <div className="flex items-center gap-3 pl-4 pr-2 py-2 rounded-full bg-zinc-900 dark:bg-[#1C1C22] text-white text-xs font-medium shadow-lg dark:shadow-[0_12px_36px_rgba(0,0,0,0.55)] border border-zinc-800 dark:border-[#34343D]">
             <span>
               {pendingUndoDelete.pedidos.length === 1
                 ? `Pedido #${pendingUndoDelete.pedidos[0]?.numeroPedido} eliminado`
@@ -1110,7 +1111,7 @@ export function ErpShell({
             <button
               type="button"
               onClick={handleDeshacerEliminacion}
-              className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white text-[#111111] hover:bg-[#FCE7F3] font-semibold transition-colors"
+              className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white text-[#111111] hover:bg-[#FCE7F3] dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-white font-semibold transition-colors"
             >
               <Undo2 className="w-3.5 h-3.5" strokeWidth={1.75} />
               Deshacer
@@ -1119,28 +1120,28 @@ export function ErpShell({
         </div>
       )}
 
-      <div className="h-[2px] w-full bg-[#F4B6CE]" />
-      <header className="sticky top-0 z-30 h-[60px] bg-white/95 backdrop-blur border-b border-[#EAEAEA]">
+      <div className="h-[2px] w-full bg-[#F4B6CE] dark:bg-[#F4B6CE]/80" />
+      <header className="sticky top-0 z-30 h-[60px] bg-white/95 dark:bg-[#141417]/90 backdrop-blur border-b border-[#EAEAEA] dark:border-[#26262B]">
         <div className="max-w-7xl mx-auto h-full px-4 sm:px-6 flex items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <div className="inline-flex items-center">
               <MibiLogo width={64} variant="pink" />
             </div>
-            <span className="hidden md:inline-flex items-center gap-1.5 text-[11px] text-zinc-400">
+            <span className="hidden md:inline-flex items-center gap-1.5 text-[11px] text-zinc-400 dark:text-zinc-500">
               <span className={`w-1.5 h-1.5 rounded-full ${isLocalDev ? 'bg-amber-400' : 'bg-emerald-500'}`} />
               {isLocalDev ? 'Entorno Local' : 'Nube privada'}
             </span>
           </div>
 
           {!esDeposito && (
-            <nav className="inline-flex items-center p-1 rounded-full bg-zinc-100 border border-zinc-200/70">
+            <nav className="inline-flex items-center p-1 rounded-full bg-zinc-100 dark:bg-[#1B1B1F] border border-zinc-200/70 dark:border-[#26262B]">
               <button
                 type="button"
                 onClick={() => setVista('pedidos')}
                 className={`px-4 py-1.5 rounded-full text-xs font-medium transition-all ${
                   vista === 'pedidos'
-                    ? 'bg-white text-[#111111] shadow-[0_1px_2px_rgba(0,0,0,0.06)]'
-                    : 'text-zinc-500 hover:text-[#111111]'
+                    ? 'bg-white text-[#111111] dark:bg-[#2A2A32] dark:text-white shadow-[0_1px_2px_rgba(0,0,0,0.06)]'
+                    : 'text-zinc-500 hover:text-[#111111] dark:text-zinc-400 dark:hover:text-[#F4F4F5]'
                 }`}
               >
                 Pedidos
@@ -1150,12 +1151,12 @@ export function ErpShell({
                 onClick={() => setVista('nuevo')}
                 className={`inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs font-medium transition-all ${
                   vista === 'nuevo'
-                    ? 'bg-white text-[#111111] shadow-[0_1px_2px_rgba(0,0,0,0.06)]'
-                    : 'text-zinc-500 hover:text-[#111111]'
+                    ? 'bg-white text-[#111111] dark:bg-[#2A2A32] dark:text-white shadow-[0_1px_2px_rgba(0,0,0,0.06)]'
+                    : 'text-zinc-500 hover:text-[#111111] dark:text-zinc-400 dark:hover:text-[#F4F4F5]'
                 }`}
               >
                 <span>Nuevo pedido</span>
-                {hayBorradorSinGuardar && <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />}
+                {hayBorradorSinGuardar && <span className="w-1.5 h-1.5 rounded-full bg-amber-500 dark:bg-amber-400" />}
               </button>
             </nav>
           )}
@@ -1165,7 +1166,7 @@ export function ErpShell({
               <button
                 type="button"
                 onClick={() => setModalCatalogoAbierto(true)}
-                className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-white border border-zinc-200 text-zinc-700 hover:bg-zinc-50 transition-colors"
+                className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-white border border-zinc-200 text-zinc-700 hover:bg-zinc-50 dark:bg-[#1B1B1F] dark:border-[#2E2E35] dark:text-zinc-200 dark:hover:bg-[#24242B] transition-colors"
                 title="Productos fuera de planilla"
               >
                 <BookOpen className="w-3.5 h-3.5" strokeWidth={1.5} />
@@ -1177,7 +1178,7 @@ export function ErpShell({
               <button
                 type="button"
                 onClick={() => void handleExportarTablero()}
-                className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-white border border-zinc-200 text-zinc-700 hover:bg-zinc-50 transition-colors"
+                className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-white border border-zinc-200 text-zinc-700 hover:bg-zinc-50 dark:bg-[#1B1B1F] dark:border-[#2E2E35] dark:text-zinc-200 dark:hover:bg-[#24242B] transition-colors"
               >
                 <Download className="w-3.5 h-3.5" strokeWidth={1.5} />
                 Exportar Excel
@@ -1188,7 +1189,7 @@ export function ErpShell({
               <button
                 type="button"
                 onClick={() => fileInputGeneralRef.current?.click()}
-                className="hidden lg:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-white border border-zinc-200 text-zinc-700 hover:bg-zinc-50 transition-colors"
+                className="hidden lg:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-white border border-zinc-200 text-zinc-700 hover:bg-zinc-50 dark:bg-[#1B1B1F] dark:border-[#2E2E35] dark:text-zinc-200 dark:hover:bg-[#24242B] transition-colors"
                 title="Importar planilla general previa PEDIDOS MAYORISTA MIBI.xlsx"
               >
                 <Upload className="w-3.5 h-3.5" strokeWidth={1.5} />
@@ -1203,7 +1204,7 @@ export function ErpShell({
                 className={`hidden sm:inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${
                   confirmReiniciar
                     ? 'bg-red-600 text-white border-red-600'
-                    : 'bg-white text-zinc-500 border-zinc-200 hover:text-red-700 hover:border-red-200'
+                    : 'bg-white text-zinc-500 border-zinc-200 hover:text-red-700 hover:border-red-200 dark:bg-[#1B1B1F] dark:text-zinc-400 dark:border-[#2E2E35] dark:hover:text-red-400 dark:hover:border-red-500/40'
                 }`}
               >
                 <RotateCcw className="w-3.5 h-3.5" strokeWidth={1.5} />
@@ -1212,26 +1213,28 @@ export function ErpShell({
             )}
 
             {esDeposito ? (
-              <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-zinc-50 border border-zinc-200/80 text-zinc-700">
-                <Users className="w-3.5 h-3.5 text-zinc-500" strokeWidth={1.5} />
+              <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-zinc-50 border border-zinc-200/80 text-zinc-700 dark:bg-[#1B1B1F] dark:border-[#2E2E35] dark:text-zinc-200">
+                <Users className="w-3.5 h-3.5 text-zinc-500 dark:text-zinc-400" strokeWidth={1.5} />
                 <span>{session.nombre}</span>
               </span>
             ) : (
               <button
                 type="button"
                 onClick={() => setModalEquipoAbierto(true)}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-zinc-50 border border-zinc-200/80 text-zinc-700 hover:bg-zinc-100 transition-colors"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-zinc-50 border border-zinc-200/80 text-zinc-700 hover:bg-zinc-100 dark:bg-[#1B1B1F] dark:border-[#2E2E35] dark:text-zinc-200 dark:hover:bg-[#24242B] transition-colors"
                 title="Equipo y verificación técnica"
               >
-                <Users className="w-3.5 h-3.5 text-zinc-500" strokeWidth={1.5} />
+                <Users className="w-3.5 h-3.5 text-zinc-500 dark:text-zinc-400" strokeWidth={1.5} />
                 <span className="hidden sm:inline">{session.nombre}</span>
               </button>
             )}
 
+            <ThemeToggle />
+
             <button
               type="button"
               onClick={() => void logoutAction()}
-              className="p-1.5 rounded-full text-zinc-400 hover:text-zinc-800 hover:bg-zinc-100 transition-colors"
+              className="p-1.5 rounded-full text-zinc-400 hover:text-zinc-800 hover:bg-zinc-100 dark:hover:text-[#F4F4F5] dark:hover:bg-[#1B1B1F] transition-colors"
               title="Bloquear sesión"
               aria-label="Bloquear sesión"
             >
@@ -1246,67 +1249,67 @@ export function ErpShell({
           <div className="space-y-6">
             {esDeposito ? (
               <section className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-                <div className="bg-white rounded-2xl border border-[#EAEAEA] shadow-[0_1px_2px_rgba(0,0,0,0.03)] px-5 py-4">
-                  <div className="text-xs font-medium text-zinc-500">Por armar</div>
-                  <div className="mt-1.5 text-2xl font-semibold tracking-tight text-[#111111] tabular-nums">
+                <div className="bg-white dark:bg-[#141417] rounded-2xl border border-[#EAEAEA] dark:border-[#26262B] shadow-[0_1px_2px_rgba(0,0,0,0.03)] px-5 py-4">
+                  <div className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Por armar</div>
+                  <div className="mt-1.5 text-2xl font-semibold tracking-tight text-[#111111] dark:text-[#F4F4F5] tabular-nums">
                     {resumenDeposito.porArmar}
                   </div>
                 </div>
 
-                <div className="bg-white rounded-2xl border border-[#EAEAEA] shadow-[0_1px_2px_rgba(0,0,0,0.03)] px-5 py-4">
-                  <div className="text-xs font-medium text-zinc-500">Urgentes</div>
-                  <div className="mt-1.5 text-2xl font-semibold tracking-tight text-red-700 tabular-nums">
+                <div className="bg-white dark:bg-[#141417] rounded-2xl border border-[#EAEAEA] dark:border-[#26262B] shadow-[0_1px_2px_rgba(0,0,0,0.03)] px-5 py-4">
+                  <div className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Urgentes</div>
+                  <div className="mt-1.5 text-2xl font-semibold tracking-tight text-red-700 dark:text-red-400 tabular-nums">
                     {resumenDeposito.urgentes}
                   </div>
                 </div>
 
-                <div className="bg-white rounded-2xl border border-[#EAEAEA] shadow-[0_1px_2px_rgba(0,0,0,0.03)] px-5 py-4">
-                  <div className="text-xs font-medium text-zinc-500">En armado</div>
-                  <div className="mt-1.5 text-2xl font-semibold tracking-tight text-[#111111] tabular-nums">
+                <div className="bg-white dark:bg-[#141417] rounded-2xl border border-[#EAEAEA] dark:border-[#26262B] shadow-[0_1px_2px_rgba(0,0,0,0.03)] px-5 py-4">
+                  <div className="text-xs font-medium text-zinc-500 dark:text-zinc-400">En armado</div>
+                  <div className="mt-1.5 text-2xl font-semibold tracking-tight text-[#111111] dark:text-[#F4F4F5] tabular-nums">
                     {resumenDeposito.enArmado}
                   </div>
                 </div>
 
-                <div className="bg-white rounded-2xl border border-[#EAEAEA] shadow-[0_1px_2px_rgba(0,0,0,0.03)] px-5 py-4">
-                  <div className="text-xs font-medium text-zinc-500">Listos para despachar</div>
-                  <div className="mt-1.5 text-2xl font-semibold tracking-tight text-emerald-700 tabular-nums">
+                <div className="bg-white dark:bg-[#141417] rounded-2xl border border-[#EAEAEA] dark:border-[#26262B] shadow-[0_1px_2px_rgba(0,0,0,0.03)] px-5 py-4">
+                  <div className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Listos para despachar</div>
+                  <div className="mt-1.5 text-2xl font-semibold tracking-tight text-emerald-700 dark:text-emerald-400 tabular-nums">
                     {resumenDeposito.listosDespachar}
                   </div>
                 </div>
               </section>
             ) : (
               <section className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-                <div className="bg-white rounded-2xl border border-[#EAEAEA] shadow-[0_1px_2px_rgba(0,0,0,0.03)] px-5 py-4">
-                  <div className="text-xs font-medium text-zinc-500">Por armar</div>
-                  <div className="mt-1.5 text-2xl font-semibold tracking-tight text-[#111111] tabular-nums">
+                <div className="bg-white dark:bg-[#141417] rounded-2xl border border-[#EAEAEA] dark:border-[#26262B] shadow-[0_1px_2px_rgba(0,0,0,0.03)] px-5 py-4">
+                  <div className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Por armar</div>
+                  <div className="mt-1.5 text-2xl font-semibold tracking-tight text-[#111111] dark:text-[#F4F4F5] tabular-nums">
                     {resumenFinanciero.porArmar}
                   </div>
                 </div>
 
-                <div className="bg-white rounded-2xl border border-[#EAEAEA] shadow-[0_1px_2px_rgba(0,0,0,0.03)] px-5 py-4">
-                  <div className="text-xs font-medium text-zinc-500">Cobrado en mano</div>
-                  <div className="mt-1.5 text-2xl font-semibold tracking-tight text-emerald-700 tabular-nums">
+                <div className="bg-white dark:bg-[#141417] rounded-2xl border border-[#EAEAEA] dark:border-[#26262B] shadow-[0_1px_2px_rgba(0,0,0,0.03)] px-5 py-4">
+                  <div className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Cobrado en mano</div>
+                  <div className="mt-1.5 text-2xl font-semibold tracking-tight text-emerald-700 dark:text-emerald-400 tabular-nums">
                     {formatARSCompacto(resumenFinanciero.cobradoEnMano)}
                   </div>
                 </div>
 
-                <div className="bg-white rounded-2xl border border-[#EAEAEA] shadow-[0_1px_2px_rgba(0,0,0,0.03)] px-5 py-4">
+                <div className="bg-white dark:bg-[#141417] rounded-2xl border border-[#EAEAEA] dark:border-[#26262B] shadow-[0_1px_2px_rgba(0,0,0,0.03)] px-5 py-4">
                   <div className="flex items-center justify-between gap-2">
-                    <span className="text-xs font-medium text-zinc-500">En cheques 30d</span>
+                    <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">En cheques 30d</span>
                     {resumenFinanciero.chequesPorVencer > 0 && (
-                      <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-red-50 text-red-700 border border-red-200/70 tabular-nums">
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-red-50 text-red-700 border border-red-200/70 dark:bg-red-500/15 dark:text-red-300 dark:border-red-500/30 tabular-nums">
                         {resumenFinanciero.chequesPorVencer} al cobro
                       </span>
                     )}
                   </div>
-                  <div className="mt-1.5 text-2xl font-semibold tracking-tight text-amber-700 tabular-nums">
+                  <div className="mt-1.5 text-2xl font-semibold tracking-tight text-amber-700 dark:text-amber-400 tabular-nums">
                     {formatARSCompacto(resumenFinanciero.enCheques)}
                   </div>
                 </div>
 
-                <div className="bg-white rounded-2xl border border-[#EAEAEA] shadow-[0_1px_2px_rgba(0,0,0,0.03)] px-5 py-4">
-                  <div className="text-xs font-medium text-zinc-500">Falta pago</div>
-                  <div className="mt-1.5 text-2xl font-semibold tracking-tight text-[#111111] tabular-nums">
+                <div className="bg-white dark:bg-[#141417] rounded-2xl border border-[#EAEAEA] dark:border-[#26262B] shadow-[0_1px_2px_rgba(0,0,0,0.03)] px-5 py-4">
+                  <div className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Falta pago</div>
+                  <div className="mt-1.5 text-2xl font-semibold tracking-tight text-[#111111] dark:text-[#F4F4F5] tabular-nums">
                     {formatARSCompacto(resumenFinanciero.faltaPago)}
                   </div>
                 </div>
@@ -1314,25 +1317,25 @@ export function ErpShell({
             )}
 
             {pedidos.length === 0 ? (
-              <section className="bg-white rounded-2xl border border-[#EAEAEA] shadow-[0_1px_2px_rgba(0,0,0,0.03)] px-6 py-16 text-center space-y-4">
-                <div className="mx-auto w-11 h-11 rounded-full bg-zinc-100 flex items-center justify-center text-zinc-500">
+              <section className="bg-white dark:bg-[#141417] rounded-2xl border border-[#EAEAEA] dark:border-[#26262B] shadow-[0_1px_2px_rgba(0,0,0,0.03)] px-6 py-16 text-center space-y-4">
+                <div className="mx-auto w-11 h-11 rounded-full bg-zinc-100 dark:bg-[#1B1B1F] flex items-center justify-center text-zinc-500 dark:text-zinc-400">
                   <Package className="w-5 h-5" strokeWidth={1.5} />
                 </div>
                 {esDeposito ? (
                   <div className="space-y-1">
-                    <h2 className="text-base font-semibold text-[#111111]">
+                    <h2 className="text-base font-semibold text-[#111111] dark:text-[#F4F4F5]">
                       No hay pedidos asignados a Depósito todavía
                     </h2>
-                    <p className="text-xs text-zinc-500 max-w-md mx-auto">
+                    <p className="text-xs text-zinc-500 dark:text-zinc-400 max-w-md mx-auto">
                       Cuando Administración envíe un pedido listo a tu cuenta, aparecerá acá automáticamente.
                     </p>
                   </div>
                 ) : (
                   <>
                     <div className="space-y-1">
-                      <h2 className="text-base font-semibold text-[#111111]">Todavía no hay pedidos cargados</h2>
-                      <p className="text-xs text-zinc-500 max-w-md mx-auto">
-                        Subí la planilla oficial <strong className="font-medium text-zinc-700">LISTA N° 006</strong> de un
+                      <h2 className="text-base font-semibold text-[#111111] dark:text-[#F4F4F5]">Todavía no hay pedidos cargados</h2>
+                      <p className="text-xs text-zinc-500 dark:text-zinc-400 max-w-md mx-auto">
+                        Subí la planilla oficial <strong className="font-medium text-zinc-700 dark:text-zinc-200">LISTA N° 006</strong> de un
                         cliente o importá tu planilla general para empezar a operar.
                       </p>
                     </div>
@@ -1340,7 +1343,7 @@ export function ErpShell({
                       <button
                         type="button"
                         onClick={() => setVista('nuevo')}
-                        className="inline-flex items-center gap-1.5 px-5 py-2.5 rounded-full text-xs font-medium bg-zinc-900 hover:bg-zinc-800 text-white transition-colors"
+                        className="inline-flex items-center gap-1.5 px-5 py-2.5 rounded-full text-xs font-medium bg-zinc-900 hover:bg-zinc-800 text-white dark:bg-zinc-100 dark:hover:bg-white dark:text-zinc-950 transition-colors"
                       >
                         <Plus className="w-3.5 h-3.5" strokeWidth={1.75} />
                         Nuevo pedido
@@ -1349,7 +1352,7 @@ export function ErpShell({
                         <button
                           type="button"
                           onClick={() => fileInputGeneralRef.current?.click()}
-                          className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-full text-xs font-medium bg-white border border-zinc-200 text-zinc-700 hover:bg-zinc-50 transition-colors"
+                          className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-full text-xs font-medium bg-white border border-zinc-200 text-zinc-700 hover:bg-zinc-50 dark:bg-[#1B1B1F] dark:border-[#2E2E35] dark:text-zinc-200 dark:hover:bg-[#24242B] transition-colors"
                         >
                           <Upload className="w-3.5 h-3.5" strokeWidth={1.5} />
                           Importar planilla previa
@@ -1364,7 +1367,7 @@ export function ErpShell({
                 <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
                   <div className="relative w-full md:w-80">
                     <Search
-                      className="w-4 h-4 text-zinc-400 absolute left-3.5 top-1/2 -translate-y-1/2"
+                      className="w-4 h-4 text-zinc-400 dark:text-zinc-500 absolute left-3.5 top-1/2 -translate-y-1/2"
                       strokeWidth={1.5}
                     />
                     <input
@@ -1373,19 +1376,19 @@ export function ErpShell({
                       value={busqueda}
                       onChange={(e) => setBusqueda(e.target.value)}
                       placeholder="Buscar cliente, número o artículo..."
-                      className="w-full pl-9 pr-10 py-2 text-sm bg-white border border-zinc-200/90 rounded-full focus:outline-none focus:border-zinc-400 transition-colors placeholder:text-zinc-400"
+                      className="w-full pl-9 pr-10 py-2 text-sm bg-white dark:bg-[#141417] dark:text-[#F4F4F5] border border-zinc-200/90 dark:border-[#26262B] rounded-full focus:outline-none focus:border-zinc-400 dark:focus:border-[#F4B6CE]/60 transition-colors placeholder:text-zinc-400 dark:placeholder:text-zinc-500"
                     />
                     {busqueda ? (
                       <button
                         type="button"
                         onClick={() => setBusqueda('')}
-                        className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-700"
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200"
                         aria-label="Limpiar búsqueda"
                       >
                         <X className="w-3.5 h-3.5" strokeWidth={1.5} />
                       </button>
                     ) : (
-                      <kbd className="hidden sm:inline-block absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-medium text-zinc-400 bg-zinc-100 border border-zinc-200/80 rounded px-1.5 py-0.5 pointer-events-none">
+                      <kbd className="hidden sm:inline-block absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-medium text-zinc-400 dark:text-zinc-500 bg-zinc-100 dark:bg-[#1B1B1F] border border-zinc-200/80 dark:border-[#2E2E35] rounded px-1.5 py-0.5 pointer-events-none">
                         /
                       </kbd>
                     )}
@@ -1401,12 +1404,16 @@ export function ErpShell({
                           onClick={() => setFiltro(item.id)}
                           className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${
                             activo
-                              ? 'bg-zinc-900 text-white border-zinc-900'
-                              : 'bg-white text-zinc-600 border-zinc-200/90 hover:bg-zinc-50'
+                              ? 'bg-zinc-900 text-white border-zinc-900 dark:bg-zinc-100 dark:text-zinc-950 dark:border-zinc-100'
+                              : 'bg-white text-zinc-600 border-zinc-200/90 hover:bg-zinc-50 dark:bg-[#141417] dark:text-zinc-300 dark:border-[#26262B] dark:hover:bg-[#1B1B1F]'
                           }`}
                         >
                           <span>{item.label}</span>
-                          <span className={`text-[11px] tabular-nums ${activo ? 'text-zinc-300' : 'text-zinc-400'}`}>
+                          <span
+                            className={`text-[11px] tabular-nums ${
+                              activo ? 'text-zinc-300 dark:text-zinc-600' : 'text-zinc-400 dark:text-zinc-500'
+                            }`}
+                          >
                             {item.count}
                           </span>
                         </button>
@@ -1417,7 +1424,7 @@ export function ErpShell({
                       <button
                         type="button"
                         onClick={() => setVista('nuevo')}
-                        className="ml-1 inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs font-medium bg-zinc-900 hover:bg-zinc-800 text-white transition-colors"
+                        className="ml-1 inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs font-medium bg-zinc-900 hover:bg-zinc-800 text-white dark:bg-zinc-100 dark:hover:bg-white dark:text-zinc-950 transition-colors"
                       >
                         <Plus className="w-3.5 h-3.5" strokeWidth={1.75} />
                         Nuevo pedido
@@ -1470,7 +1477,7 @@ export function ErpShell({
         )}
       </main>
 
-      <footer className="py-6 text-center text-[11px] text-zinc-400 border-t border-zinc-200/50">
+      <footer className="py-6 text-center text-[11px] text-zinc-400 dark:text-zinc-500 border-t border-zinc-200/50 dark:border-[#26262B]">
         {MIBI_BRAND.pieOficial}
       </footer>
 

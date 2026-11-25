@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import { Plus_Jakarta_Sans } from 'next/font/google';
 import { Analytics } from '@vercel/analytics/next';
+import { ThemeProvider } from '@/components/theme-provider';
 import './globals.css';
 
 const plusJakarta = Plus_Jakarta_Sans({
@@ -8,6 +9,8 @@ const plusJakarta = Plus_Jakarta_Sans({
   weight: ['400', '500', '600', '700'],
   display: 'swap'
 });
+
+const THEME_INIT_SCRIPT = `(function(){try{var t=localStorage.getItem('mibi_theme')||'system';var d=t==='dark'||(t==='system'&&window.matchMedia('(prefers-color-scheme: dark)').matches);document.documentElement.classList.toggle('dark',d);document.documentElement.style.colorScheme=d?'dark':'light';}catch(e){}})();`;
 
 export const metadata: Metadata = {
   title: 'Mibi® — Gestión Mayorista',
@@ -29,11 +32,14 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }): React.JSX.Element {
   return (
-    <html lang="es">
+    <html lang="es" suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
+      </head>
       <body
-        className={`${plusJakarta.className} bg-[#FAFAFA] text-[#111111] antialiased selection:bg-[#FCE7F3]`}
+        className={`${plusJakarta.className} bg-[#FAFAFA] text-[#111111] dark:bg-[#0B0B0D] dark:text-[#F4F4F5] antialiased selection:bg-[#FCE7F3] dark:selection:bg-[#F4B6CE]/25 dark:selection:text-[#FCE7F3] transition-colors duration-150`}
       >
-        {children}
+        <ThemeProvider>{children}</ThemeProvider>
         <Analytics />
       </body>
     </html>

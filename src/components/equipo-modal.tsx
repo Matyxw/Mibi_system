@@ -116,52 +116,52 @@ export function EquipoModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 px-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 dark:bg-black/65 px-4"
       onClick={onClose}
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-xl bg-white rounded-2xl border border-[#EAEAEA] shadow-2xl p-6 space-y-5 max-h-[88vh] overflow-y-auto"
+        className="w-full max-w-xl bg-white dark:bg-[#141417] rounded-2xl border border-[#EAEAEA] dark:border-[#26262B] shadow-2xl p-6 space-y-5 max-h-[88vh] overflow-y-auto"
       >
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <ShieldCheck className="w-4 h-4 text-zinc-700" strokeWidth={1.5} />
-            <h2 className="text-sm font-semibold text-[#111111]">Equipo y verificación del sistema</h2>
+            <ShieldCheck className="w-4 h-4 text-zinc-700 dark:text-zinc-300" strokeWidth={1.5} />
+            <h2 className="text-sm font-semibold text-[#111111] dark:text-[#F4F4F5]">Equipo y verificación del sistema</h2>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="p-1.5 rounded-full text-zinc-400 hover:text-zinc-900"
+            className="p-1.5 rounded-full text-zinc-400 hover:text-zinc-900 dark:hover:text-[#F4F4F5]"
           >
             <X className="w-4 h-4" strokeWidth={1.5} />
           </button>
         </div>
 
-        <div className="bg-[#FAFAFA] rounded-xl border border-zinc-200/80 px-4 py-3 text-xs flex items-center justify-between">
+        <div className="bg-[#FAFAFA] dark:bg-[#1B1B1F] rounded-xl border border-zinc-200/80 dark:border-[#26262B] px-4 py-3 text-xs flex items-center justify-between">
           <div>
-            <div className="font-semibold text-[#111111]">
-              {session.nombre} <span className="text-zinc-400 font-normal">(@{session.username})</span>
+            <div className="font-semibold text-[#111111] dark:text-[#F4F4F5]">
+              {session.nombre} <span className="text-zinc-400 dark:text-zinc-500 font-normal">(@{session.username})</span>
             </div>
-            <div className="text-zinc-500">Perfil activo: {rolUsuarioToLabel(session.rol)}</div>
+            <div className="text-zinc-500 dark:text-zinc-400">Perfil activo: {rolUsuarioToLabel(session.rol)}</div>
           </div>
           <StatusPill tone={esAdmin ? 'green' : 'neutral'}>{rolUsuarioToLabel(session.rol)}</StatusPill>
         </div>
 
         {esAdmin && (
-          <div className="space-y-4 pt-2 border-t border-zinc-200/70">
-            <div className="text-xs font-semibold text-zinc-600">Usuarios internos</div>
+          <div className="space-y-4 pt-2 border-t border-zinc-200/70 dark:border-[#26262B]">
+            <div className="text-xs font-semibold text-zinc-600 dark:text-zinc-300">Usuarios internos</div>
 
             {cargando ? (
-              <div className="text-xs text-zinc-400 py-3">Cargando equipo...</div>
+              <div className="text-xs text-zinc-400 dark:text-zinc-500 py-3">Cargando equipo...</div>
             ) : (
-              <div className="divide-y divide-zinc-200/60 border border-zinc-200/80 rounded-xl">
+              <div className="divide-y divide-zinc-200/60 dark:divide-[#26262B]/80 border border-zinc-200/80 dark:border-[#26262B] rounded-xl">
                 {usuarios.map((u) => (
                   <div key={u.id} className="px-3.5 py-2.5 text-xs space-y-2">
                     <div className="flex items-center justify-between gap-2">
                       <div>
-                        <span className="font-semibold text-[#111111]">{u.nombre}</span>{' '}
-                        <span className="text-zinc-400">@{u.username}</span>
-                        <div className="text-[11px] text-zinc-500">{rolUsuarioToLabel(u.rol)}</div>
+                        <span className="font-semibold text-[#111111] dark:text-[#F4F4F5]">{u.nombre}</span>{' '}
+                        <span className="text-zinc-400 dark:text-zinc-500">@{u.username}</span>
+                        <div className="text-[11px] text-zinc-500 dark:text-zinc-400">{rolUsuarioToLabel(u.rol)}</div>
                       </div>
                       <div className="flex items-center gap-1.5">
                         <StatusPill tone={u.activo ? 'green' : 'red'}>
@@ -171,7 +171,7 @@ export function EquipoModal({
                           <select
                             value={u.rol}
                             onChange={(e) => void handleCambiarRol(u, e.target.value as RolUsuario)}
-                            className="px-2 py-1 rounded-full border border-zinc-200 bg-white text-[11px] text-zinc-700"
+                            className="px-2 py-1 rounded-full border border-zinc-200 dark:border-[#2E2E35] bg-white dark:bg-[#1B1B1F] text-[11px] text-zinc-700 dark:text-zinc-200"
                             aria-label={`Rol de ${u.nombre}`}
                           >
                             <option value="VENTAS">Ventas</option>
@@ -188,7 +188,7 @@ export function EquipoModal({
                             setRotandoId(rotandoId === u.id ? null : u.id);
                             setPasswordRotada('');
                           }}
-                          className="px-2.5 py-1 rounded-full border border-zinc-200 text-[11px] text-zinc-700 hover:bg-zinc-50 inline-flex items-center gap-1"
+                          className="px-2.5 py-1 rounded-full border border-zinc-200 dark:border-[#2E2E35] dark:bg-[#1B1B1F] text-[11px] text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-[#24242B] inline-flex items-center gap-1"
                         >
                           <KeyRound className="w-3 h-3" strokeWidth={1.5} />
                           Clave
@@ -197,7 +197,7 @@ export function EquipoModal({
                           <button
                             type="button"
                             onClick={() => void handleToggleActivo(u)}
-                            className="px-2.5 py-1 rounded-full border border-zinc-200 text-[11px] text-zinc-700 hover:bg-zinc-50"
+                            className="px-2.5 py-1 rounded-full border border-zinc-200 dark:border-[#2E2E35] dark:bg-[#1B1B1F] text-[11px] text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-[#24242B]"
                           >
                             {u.activo ? 'Desactivar' : 'Activar'}
                           </button>
@@ -212,13 +212,13 @@ export function EquipoModal({
                           value={passwordRotada}
                           onChange={(e) => setPasswordRotada(e.target.value)}
                           placeholder="Nueva contraseña (mín. 4 caracteres)"
-                          className="flex-1 px-3 py-1.5 text-xs bg-white border border-zinc-200 rounded-lg"
+                          className="flex-1 px-3 py-1.5 text-xs bg-white dark:bg-[#1B1B1F] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-lg placeholder:text-zinc-400 dark:placeholder:text-zinc-500"
                         />
                         <button
                           type="button"
                           disabled={guardando}
                           onClick={() => void handleRotarPassword(u.id)}
-                          className="px-3 py-1.5 rounded-full text-xs font-medium bg-zinc-900 text-white hover:bg-zinc-800"
+                          className="px-3 py-1.5 rounded-full text-xs font-medium bg-zinc-900 text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-white"
                         >
                           Guardar
                         </button>
@@ -229,8 +229,8 @@ export function EquipoModal({
               </div>
             )}
 
-            <form onSubmit={(e) => void handleCrearUsuario(e)} className="space-y-3 pt-2 border-t border-zinc-200/60">
-              <div className="text-xs font-semibold text-zinc-600 flex items-center gap-1.5">
+            <form onSubmit={(e) => void handleCrearUsuario(e)} className="space-y-3 pt-2 border-t border-zinc-200/60 dark:border-[#26262B]">
+              <div className="text-xs font-semibold text-zinc-600 dark:text-zinc-300 flex items-center gap-1.5">
                 <UserPlus className="w-3.5 h-3.5" strokeWidth={1.5} />
                 Alta de usuario interno
               </div>
@@ -240,19 +240,19 @@ export function EquipoModal({
                   value={nuevoUsername}
                   onChange={(e) => setNuevoUsername(e.target.value)}
                   placeholder="Usuario (ej. lucas)"
-                  className="px-3 py-2 bg-white border border-zinc-200 rounded-xl"
+                  className="px-3 py-2 bg-white dark:bg-[#1B1B1F] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-xl placeholder:text-zinc-400 dark:placeholder:text-zinc-500"
                 />
                 <input
                   type="text"
                   value={nuevoNombre}
                   onChange={(e) => setNuevoNombre(e.target.value)}
                   placeholder="Nombre visible (ej. Lucas)"
-                  className="px-3 py-2 bg-white border border-zinc-200 rounded-xl"
+                  className="px-3 py-2 bg-white dark:bg-[#1B1B1F] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-xl placeholder:text-zinc-400 dark:placeholder:text-zinc-500"
                 />
                 <select
                   value={nuevoRol}
                   onChange={(e) => setNuevoRol(e.target.value as RolUsuario)}
-                  className="px-3 py-2 bg-white border border-zinc-200 rounded-xl"
+                  className="px-3 py-2 bg-white dark:bg-[#1B1B1F] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-xl"
                 >
                   <option value="VENTAS">Ventas</option>
                   <option value="DEPOSITO">Depósito</option>
@@ -263,13 +263,13 @@ export function EquipoModal({
                   value={nuevaPassword}
                   onChange={(e) => setNuevaPassword(e.target.value)}
                   placeholder="Contraseña inicial"
-                  className="px-3 py-2 bg-white border border-zinc-200 rounded-xl"
+                  className="px-3 py-2 bg-white dark:bg-[#1B1B1F] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-xl placeholder:text-zinc-400 dark:placeholder:text-zinc-500"
                 />
               </div>
               <button
                 type="submit"
                 disabled={guardando}
-                className="px-4 py-2 rounded-full text-xs font-medium bg-zinc-900 text-white hover:bg-zinc-800 disabled:opacity-50"
+                className="px-4 py-2 rounded-full text-xs font-medium bg-zinc-900 text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-white disabled:opacity-50"
               >
                 Crear usuario
               </button>
@@ -277,28 +277,28 @@ export function EquipoModal({
           </div>
         )}
 
-        <div className="pt-4 border-t border-zinc-200/70 space-y-2.5">
+        <div className="pt-4 border-t border-zinc-200/70 dark:border-[#26262B] space-y-2.5">
           <button
             type="button"
             onClick={() => setResultadosVerificacion(ejecutarSuiteQA())}
-            className="w-full inline-flex items-center justify-center gap-1.5 py-2 rounded-full text-xs font-medium bg-[#FAFAFA] border border-zinc-200 text-zinc-700 hover:bg-zinc-100 transition-colors"
+            className="w-full inline-flex items-center justify-center gap-1.5 py-2 rounded-full text-xs font-medium bg-[#FAFAFA] dark:bg-[#1B1B1F] border border-zinc-200 dark:border-[#2E2E35] text-zinc-700 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-[#24242B] transition-colors"
           >
-            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" strokeWidth={1.5} />
+            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" strokeWidth={1.5} />
             Ejecutar verificación técnica del motor (30 pruebas)
           </button>
 
           {resultadosVerificacion && (
-            <div className="space-y-1.5 max-h-60 overflow-y-auto border border-zinc-200/80 rounded-xl p-3 bg-[#FAFAFA]">
-              <div className="text-xs font-semibold text-[#111111] pb-1 border-b border-zinc-200/70 tabular-nums">
+            <div className="space-y-1.5 max-h-60 overflow-y-auto border border-zinc-200/80 dark:border-[#26262B] rounded-xl p-3 bg-[#FAFAFA] dark:bg-[#1B1B1F]">
+              <div className="text-xs font-semibold text-[#111111] dark:text-[#F4F4F5] pb-1 border-b border-zinc-200/70 dark:border-[#26262B] tabular-nums">
                 Resultado: {resultadosVerificacion.filter((r) => r.ok).length} / {resultadosVerificacion.length}{' '}
                 aprobadas
               </div>
               {resultadosVerificacion.map((r, idx) => (
                 <div key={idx} className="flex items-start justify-between gap-2 text-[11px]">
-                  <span className={r.ok ? 'text-zinc-700' : 'text-red-700 font-semibold'}>
+                  <span className={r.ok ? 'text-zinc-700 dark:text-zinc-300' : 'text-red-700 dark:text-red-400 font-semibold'}>
                     {r.ok ? '✓' : '✗'} {r.nombre}
                   </span>
-                  <span className="text-zinc-400 shrink-0 tabular-nums">{r.detalle}</span>
+                  <span className="text-zinc-400 dark:text-zinc-500 shrink-0 tabular-nums">{r.detalle}</span>
                 </div>
               ))}
             </div>

@@ -174,21 +174,21 @@ export function CatalogoModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 px-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 dark:bg-black/65 px-4"
       onClick={onClose}
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-2xl bg-white rounded-2xl border border-[#EAEAEA] shadow-2xl p-6 space-y-5 max-h-[88vh] overflow-y-auto"
+        className="w-full max-w-2xl bg-white dark:bg-[#141417] rounded-2xl border border-[#EAEAEA] dark:border-[#26262B] shadow-2xl p-6 space-y-5 max-h-[88vh] overflow-y-auto"
       >
         <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-2">
-            <PackagePlus className="w-4 h-4 text-zinc-700" strokeWidth={1.5} />
+            <PackagePlus className="w-4 h-4 text-zinc-700 dark:text-zinc-300" strokeWidth={1.5} />
             <div>
-              <h2 className="text-sm font-semibold text-[#111111]">
+              <h2 className="text-sm font-semibold text-[#111111] dark:text-[#F4F4F5]">
                 Catálogo fuera de planilla ({productos.length})
               </h2>
-              <p className="text-[11px] text-zinc-500">
+              <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
                 Pilusos y artículos adicionales combinados con Lista N° 006 ({CATALOGO_MIBI.length} grupos oficiales).
               </p>
             </div>
@@ -205,7 +205,7 @@ export function CatalogoModal({
                   setMostrarForm(true);
                 }
               }}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-zinc-900 hover:bg-zinc-800 text-white"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-zinc-900 hover:bg-zinc-800 text-white dark:bg-zinc-100 dark:hover:bg-white dark:text-zinc-950"
             >
               <Plus className="w-3.5 h-3.5" strokeWidth={1.75} />
               {mostrarForm ? 'Ver lista' : 'Nuevo producto'}
@@ -213,7 +213,7 @@ export function CatalogoModal({
             <button
               type="button"
               onClick={onClose}
-              className="p-1.5 rounded-full text-zinc-400 hover:text-zinc-900"
+              className="p-1.5 rounded-full text-zinc-400 hover:text-zinc-900 dark:hover:text-[#F4F4F5]"
               aria-label="Cerrar catálogo"
             >
               <X className="w-4 h-4" strokeWidth={1.5} />
@@ -224,31 +224,31 @@ export function CatalogoModal({
         {mostrarForm && (
           <form
             onSubmit={(e) => void handleSubmit(e)}
-            className="bg-[#FAFAFA] rounded-2xl border border-zinc-200/80 p-4 space-y-3.5 text-xs"
+            className="bg-[#FAFAFA] dark:bg-[#1B1B1F] rounded-2xl border border-zinc-200/80 dark:border-[#26262B] p-4 space-y-3.5 text-xs"
           >
-            <div className="font-semibold text-[#111111]">
+            <div className="font-semibold text-[#111111] dark:text-[#F4F4F5]">
               {editId ? 'Editar producto fuera de planilla' : 'Agregar producto fuera de planilla'}
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
-                <label className="block text-[11px] text-zinc-500 mb-1">Nombre del producto *</label>
+                <label className="block text-[11px] text-zinc-500 dark:text-zinc-400 mb-1">Nombre del producto *</label>
                 <input
                   type="text"
                   value={nombre}
                   onChange={(e) => setNombre(e.target.value)}
                   placeholder="Ej. Piluso Shark"
-                  className="w-full px-3 py-2 bg-white border border-zinc-200 rounded-xl"
+                  className="w-full px-3 py-2 bg-white dark:bg-[#141417] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-xl placeholder:text-zinc-400 dark:placeholder:text-zinc-500"
                 />
               </div>
 
               <div>
-                <label className="block text-[11px] text-zinc-500 mb-1">Rubro *</label>
+                <label className="block text-[11px] text-zinc-500 dark:text-zinc-400 mb-1">Rubro *</label>
                 <div className="flex gap-2">
                   <select
                     value={rubroSel}
                     onChange={(e) => setRubroSel(e.target.value)}
-                    className="flex-1 px-3 py-2 bg-white border border-zinc-200 rounded-xl"
+                    className="flex-1 px-3 py-2 bg-white dark:bg-[#141417] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-xl"
                   >
                     {RUBROS_BASE.map((r) => (
                       <option key={r} value={r}>
@@ -263,14 +263,14 @@ export function CatalogoModal({
                       value={rubroCustom}
                       onChange={(e) => setRubroCustom(e.target.value)}
                       placeholder="Ej. PILUSOS"
-                      className="w-32 px-3 py-2 bg-white border border-zinc-200 rounded-xl uppercase"
+                      className="w-32 px-3 py-2 bg-white dark:bg-[#141417] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-xl uppercase placeholder:text-zinc-400 dark:placeholder:text-zinc-500"
                     />
                   )}
                 </div>
               </div>
 
               <div>
-                <label className="block text-[11px] text-zinc-500 mb-1">Precio neto unitario ($) *</label>
+                <label className="block text-[11px] text-zinc-500 dark:text-zinc-400 mb-1">Precio neto unitario ($) *</label>
                 <input
                   type="number"
                   min={0}
@@ -278,23 +278,23 @@ export function CatalogoModal({
                   value={precioNetoStr}
                   onChange={(e) => setPrecioNetoStr(e.target.value)}
                   placeholder="0.00"
-                  className="w-full px-3 py-2 bg-white border border-zinc-200 rounded-xl tabular-nums"
+                  className="w-full px-3 py-2 bg-white dark:bg-[#141417] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-xl tabular-nums placeholder:text-zinc-400 dark:placeholder:text-zinc-500"
                 />
-                <div className="text-[11px] text-zinc-400 mt-1 tabular-nums">
+                <div className="text-[11px] text-zinc-400 dark:text-zinc-500 mt-1 tabular-nums">
                   Referencia con IVA 21%: {formatARS(precioConIva)}
                 </div>
               </div>
 
               <div>
-                <label className="block text-[11px] text-zinc-500 mb-1">Variantes</label>
+                <label className="block text-[11px] text-zinc-500 dark:text-zinc-400 mb-1">Variantes</label>
                 <div className="grid grid-cols-2 gap-1.5">
                   <button
                     type="button"
                     onClick={() => setTipoVariantes('unico')}
                     className={`py-2 px-3 rounded-xl border font-medium ${
                       tipoVariantes === 'unico'
-                        ? 'bg-zinc-900 text-white border-zinc-900'
-                        : 'bg-white text-zinc-700 border-zinc-200'
+                        ? 'bg-zinc-900 text-white border-zinc-900 dark:bg-zinc-100 dark:text-zinc-950 dark:border-zinc-100'
+                        : 'bg-white text-zinc-700 border-zinc-200 dark:bg-[#141417] dark:text-zinc-300 dark:border-[#2E2E35]'
                     }`}
                   >
                     Único
@@ -304,8 +304,8 @@ export function CatalogoModal({
                     onClick={() => setTipoVariantes('multiple')}
                     className={`py-2 px-3 rounded-xl border font-medium ${
                       tipoVariantes === 'multiple'
-                        ? 'bg-zinc-900 text-white border-zinc-900'
-                        : 'bg-white text-zinc-700 border-zinc-200'
+                        ? 'bg-zinc-900 text-white border-zinc-900 dark:bg-zinc-100 dark:text-zinc-950 dark:border-zinc-100'
+                        : 'bg-white text-zinc-700 border-zinc-200 dark:bg-[#141417] dark:text-zinc-300 dark:border-[#2E2E35]'
                     }`}
                   >
                     Con talles o colores
@@ -316,7 +316,7 @@ export function CatalogoModal({
 
             {tipoVariantes === 'unico' ? (
               <div>
-                <label className="block text-[11px] text-zinc-500 mb-1">
+                <label className="block text-[11px] text-zinc-500 dark:text-zinc-400 mb-1">
                   Código (opcional — si queda vacío se genera automático)
                 </label>
                 <input
@@ -324,17 +324,17 @@ export function CatalogoModal({
                   value={codigoUnico}
                   onChange={(e) => setCodigoUnico(e.target.value)}
                   placeholder="Ej. PIL-01 (o vacío → EXT-001)"
-                  className="w-full px-3 py-2 bg-white border border-zinc-200 rounded-xl tabular-nums uppercase"
+                  className="w-full px-3 py-2 bg-white dark:bg-[#141417] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-xl tabular-nums uppercase placeholder:text-zinc-400 dark:placeholder:text-zinc-500"
                 />
               </div>
             ) : (
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <span className="text-[11px] text-zinc-500">Talles / colores (2 o más)</span>
+                  <span className="text-[11px] text-zinc-500 dark:text-zinc-400">Talles / colores (2 o más)</span>
                   <button
                     type="button"
                     onClick={() => setVariantes((prev) => [...prev, { codigo: '', etiqueta: '' }])}
-                    className="text-[11px] font-medium text-zinc-800 hover:underline inline-flex items-center gap-1"
+                    className="text-[11px] font-medium text-zinc-800 dark:text-zinc-200 hover:underline inline-flex items-center gap-1"
                   >
                     <Plus className="w-3 h-3" strokeWidth={1.75} /> Agregar opción
                   </button>
@@ -350,7 +350,7 @@ export function CatalogoModal({
                         )
                       }
                       placeholder="Código (opc.)"
-                      className="w-28 px-2.5 py-1.5 bg-white border border-zinc-200 rounded-lg tabular-nums uppercase"
+                      className="w-28 px-2.5 py-1.5 bg-white dark:bg-[#141417] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-lg tabular-nums uppercase placeholder:text-zinc-400 dark:placeholder:text-zinc-500"
                     />
                     <input
                       type="text"
@@ -361,13 +361,13 @@ export function CatalogoModal({
                         )
                       }
                       placeholder={`Talle o color #${idx + 1}`}
-                      className="flex-1 px-2.5 py-1.5 bg-white border border-zinc-200 rounded-lg"
+                      className="flex-1 px-2.5 py-1.5 bg-white dark:bg-[#141417] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-lg placeholder:text-zinc-400 dark:placeholder:text-zinc-500"
                     />
                     {variantes.length > 2 && (
                       <button
                         type="button"
                         onClick={() => setVariantes((prev) => prev.filter((_, i) => i !== idx))}
-                        className="p-1.5 text-zinc-400 hover:text-red-600"
+                        className="p-1.5 text-zinc-400 hover:text-red-600 dark:hover:text-red-400"
                         aria-label="Quitar opción"
                       >
                         <Trash2 className="w-3.5 h-3.5" strokeWidth={1.5} />
@@ -385,14 +385,14 @@ export function CatalogoModal({
                   resetForm();
                   setMostrarForm(false);
                 }}
-                className="px-3.5 py-2 rounded-full border border-zinc-200 bg-white text-zinc-600"
+                className="px-3.5 py-2 rounded-full border border-zinc-200 dark:border-[#2E2E35] bg-white dark:bg-[#141417] text-zinc-600 dark:text-zinc-300"
               >
                 Cancelar
               </button>
               <button
                 type="submit"
                 disabled={guardando}
-                className="px-4 py-2 rounded-full bg-zinc-900 text-white font-medium hover:bg-zinc-800 disabled:opacity-50"
+                className="px-4 py-2 rounded-full bg-zinc-900 text-white font-medium hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-white disabled:opacity-50"
               >
                 {guardando ? 'Guardando...' : editId ? 'Guardar cambios' : 'Guardar producto'}
               </button>
@@ -401,29 +401,29 @@ export function CatalogoModal({
         )}
 
         {cargando ? (
-          <div className="text-xs text-zinc-400 py-6 text-center">Cargando productos...</div>
+          <div className="text-xs text-zinc-400 dark:text-zinc-500 py-6 text-center">Cargando productos...</div>
         ) : productos.length === 0 ? (
-          <div className="text-xs text-zinc-400 py-8 text-center border border-dashed border-zinc-200 rounded-xl">
+          <div className="text-xs text-zinc-400 dark:text-zinc-500 py-8 text-center border border-dashed border-zinc-200 dark:border-[#2E2E36] rounded-xl">
             Todavía no hay productos agregados fuera de la Lista N° 006.
           </div>
         ) : (
-          <div className="divide-y divide-zinc-200/60 border border-zinc-200/80 rounded-xl">
+          <div className="divide-y divide-zinc-200/60 dark:divide-[#26262B]/80 border border-zinc-200/80 dark:border-[#26262B] rounded-xl">
             {productos.map((p) => (
               <div key={p.id} className="px-4 py-3 flex items-center justify-between gap-3 text-xs">
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
-                    <span className="font-semibold text-[#111111] truncate">{p.nombre}</span>
+                    <span className="font-semibold text-[#111111] dark:text-[#F4F4F5] truncate">{p.nombre}</span>
                     <StatusPill tone={p.activo ? 'green' : 'neutral'}>
                       {p.activo ? p.rubro : 'Archivado'}
                     </StatusPill>
                   </div>
-                  <div className="text-[11px] text-zinc-500 mt-0.5 tabular-nums">
+                  <div className="text-[11px] text-zinc-500 dark:text-zinc-400 mt-0.5 tabular-nums">
                     {p.variantes.map((v) => `${v.codigo} (${v.etiqueta})`).join(' · ')}
                   </div>
                 </div>
 
                 <div className="flex items-center gap-2 shrink-0">
-                  <span className="font-semibold text-[#111111] tabular-nums">
+                  <span className="font-semibold text-[#111111] dark:text-[#F4F4F5] tabular-nums">
                     {formatARS(p.precioNeto)} neto
                   </span>
                   {esAdmin && (
@@ -431,7 +431,7 @@ export function CatalogoModal({
                       <button
                         type="button"
                         onClick={() => abrirEdicion(p)}
-                        className="px-2.5 py-1 rounded-full border border-zinc-200 text-[11px] text-zinc-700 hover:bg-zinc-50 inline-flex items-center gap-1"
+                        className="px-2.5 py-1 rounded-full border border-zinc-200 dark:border-[#2E2E35] dark:bg-[#1B1B1F] text-[11px] text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-[#24242B] inline-flex items-center gap-1"
                       >
                         <Edit3 className="w-3 h-3" strokeWidth={1.5} />
                         Editar
@@ -439,7 +439,7 @@ export function CatalogoModal({
                       <button
                         type="button"
                         onClick={() => void handleToggleArchivar(p)}
-                        className="px-2.5 py-1 rounded-full border border-zinc-200 text-[11px] text-zinc-600 hover:bg-zinc-50 inline-flex items-center gap-1"
+                        className="px-2.5 py-1 rounded-full border border-zinc-200 dark:border-[#2E2E35] dark:bg-[#1B1B1F] text-[11px] text-zinc-600 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-[#24242B] inline-flex items-center gap-1"
                       >
                         {p.activo ? (
                           <>

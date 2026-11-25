@@ -516,40 +516,40 @@ export function NuevoPedidoView({
           <button
             type="button"
             onClick={onVolver}
-            className="p-1.5 rounded-full text-zinc-400 hover:text-zinc-800 hover:bg-zinc-100 transition-colors"
+            className="p-1.5 rounded-full text-zinc-400 hover:text-zinc-800 hover:bg-zinc-100 dark:hover:text-[#F4F4F5] dark:hover:bg-[#1B1B1F] transition-colors"
             aria-label="Volver a pedidos"
           >
             <ArrowLeft className="w-4 h-4" strokeWidth={1.5} />
           </button>
           <div>
-            <h1 className="text-lg font-semibold tracking-tight text-[#111111]">
-              Nuevo pedido <span className="text-zinc-400 font-normal tabular-nums">#{proximoNumeroPedido}</span>
+            <h1 className="text-lg font-semibold tracking-tight text-[#111111] dark:text-[#F4F4F5]">
+              Nuevo pedido <span className="text-zinc-400 dark:text-zinc-500 font-normal tabular-nums">#{proximoNumeroPedido}</span>
             </h1>
-            <p className="text-xs text-zinc-500">Cargá el Excel Lista N° 006 o ingresá cantidades a mano.</p>
+            <p className="text-xs text-zinc-500 dark:text-zinc-400">Cargá el Excel Lista N° 006 o ingresá cantidades a mano.</p>
           </div>
         </div>
       </div>
 
-      <section className="bg-white rounded-2xl border border-[#EAEAEA] shadow-[0_1px_2px_rgba(0,0,0,0.03)] p-6 space-y-4">
-        <h2 className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">1. Datos del pedido</h2>
+      <section className="bg-white dark:bg-[#141417] rounded-2xl border border-[#EAEAEA] dark:border-[#26262B] shadow-[0_1px_2px_rgba(0,0,0,0.03)] p-6 space-y-4">
+        <h2 className="text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">1. Datos del pedido</h2>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div className="sm:col-span-2">
-            <label className="block text-xs font-medium text-zinc-600 mb-1.5">Cliente o negocio *</label>
+            <label className="block text-xs font-medium text-zinc-600 dark:text-zinc-300 mb-1.5">Cliente o negocio *</label>
             <input
               type="text"
               value={form.cliente}
               onChange={(e) => setForm((prev) => ({ ...prev, cliente: e.target.value }))}
               placeholder="Ej. Casa Lorenzo, Pañalera Nuevo Mundo..."
-              className="w-full px-3.5 py-2.5 text-sm bg-white border border-zinc-200 rounded-xl focus:outline-none focus:border-zinc-900"
+              className="w-full px-3.5 py-2.5 text-sm bg-white dark:bg-[#1B1B1F] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-xl placeholder:text-zinc-400 dark:placeholder:text-zinc-500 focus:outline-none focus:border-zinc-900 dark:focus:border-[#F4B6CE]/70"
             />
           </div>
 
           <div>
-            <label className="block text-xs font-medium text-zinc-600 mb-1.5">Vendedor</label>
+            <label className="block text-xs font-medium text-zinc-600 dark:text-zinc-300 mb-1.5">Vendedor</label>
             <select
               value={form.vendedor}
               onChange={(e) => setForm((prev) => ({ ...prev, vendedor: e.target.value }))}
-              className="w-full px-3.5 py-2.5 text-sm bg-white border border-zinc-200 rounded-xl focus:outline-none focus:border-zinc-900"
+              className="w-full px-3.5 py-2.5 text-sm bg-white dark:bg-[#1B1B1F] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-xl focus:outline-none focus:border-zinc-900 dark:focus:border-[#F4B6CE]/70"
             >
               {VENDEDORES_MIBI.map((v) => (
                 <option key={v} value={v}>
@@ -560,38 +560,38 @@ export function NuevoPedidoView({
           </div>
 
           <div>
-            <label className="block text-xs font-medium text-zinc-600 mb-1.5">WhatsApp del cliente</label>
+            <label className="block text-xs font-medium text-zinc-600 dark:text-zinc-300 mb-1.5">WhatsApp del cliente</label>
             <input
               type="text"
               value={form.whatsapp}
               onChange={(e) => setForm((prev) => ({ ...prev, whatsapp: e.target.value }))}
               placeholder="Ej. 11-5606-9384"
-              className="w-full px-3.5 py-2.5 text-sm bg-white border border-zinc-200 rounded-xl focus:outline-none focus:border-zinc-900 tabular-nums"
+              className="w-full px-3.5 py-2.5 text-sm bg-white dark:bg-[#1B1B1F] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-xl placeholder:text-zinc-400 dark:placeholder:text-zinc-500 focus:outline-none focus:border-zinc-900 dark:focus:border-[#F4B6CE]/70 tabular-nums"
             />
           </div>
 
           <div>
-            <label className="block text-xs font-medium text-zinc-600 mb-1.5">Fecha pedido</label>
+            <label className="block text-xs font-medium text-zinc-600 dark:text-zinc-300 mb-1.5">Fecha pedido</label>
             <input
               type="date"
               value={form.fechaPedido}
               onChange={(e) => setForm((prev) => ({ ...prev, fechaPedido: e.target.value }))}
-              className="w-full px-3.5 py-2.5 text-sm bg-white border border-zinc-200 rounded-xl focus:outline-none focus:border-zinc-900 tabular-nums"
+              className="w-full px-3.5 py-2.5 text-sm bg-white dark:bg-[#1B1B1F] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-xl focus:outline-none focus:border-zinc-900 dark:focus:border-[#F4B6CE]/70 tabular-nums"
             />
           </div>
 
           <div>
-            <label className="block text-xs font-medium text-zinc-600 mb-1.5">Despacho previsto</label>
+            <label className="block text-xs font-medium text-zinc-600 dark:text-zinc-300 mb-1.5">Despacho previsto</label>
             <input
               type="date"
               value={form.despachoPrevisto}
               onChange={(e) => setForm((prev) => ({ ...prev, despachoPrevisto: e.target.value }))}
-              className="w-full px-3.5 py-2.5 text-sm bg-white border border-zinc-200 rounded-xl focus:outline-none focus:border-zinc-900 tabular-nums"
+              className="w-full px-3.5 py-2.5 text-sm bg-white dark:bg-[#1B1B1F] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-xl focus:outline-none focus:border-zinc-900 dark:focus:border-[#F4B6CE]/70 tabular-nums"
             />
           </div>
 
           <div>
-            <label className="block text-xs font-medium text-zinc-600 mb-1.5">Descuento (%)</label>
+            <label className="block text-xs font-medium text-zinc-600 dark:text-zinc-300 mb-1.5">Descuento (%)</label>
             <input
               type="number"
               min={0}
@@ -605,27 +605,27 @@ export function NuevoPedidoView({
                   descuentoPorc: Math.max(0, Math.min(100, Number(e.target.value) || 0))
                 }))
               }
-              className="w-full px-3.5 py-2.5 text-sm bg-white border border-zinc-200 rounded-xl focus:outline-none focus:border-zinc-900 tabular-nums disabled:bg-zinc-50 disabled:text-zinc-400"
+              className="w-full px-3.5 py-2.5 text-sm bg-white dark:bg-[#1B1B1F] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-xl focus:outline-none focus:border-zinc-900 dark:focus:border-[#F4B6CE]/70 tabular-nums disabled:bg-zinc-50 dark:disabled:bg-[#141417] disabled:text-zinc-400 dark:disabled:text-zinc-500"
             />
           </div>
 
           <div>
-            <label className="block text-xs font-medium text-zinc-600 mb-1.5">Observaciones</label>
+            <label className="block text-xs font-medium text-zinc-600 dark:text-zinc-300 mb-1.5">Observaciones</label>
             <input
               type="text"
               value={form.observaciones}
               onChange={(e) => setForm((prev) => ({ ...prev, observaciones: e.target.value }))}
               placeholder="Notas internas o entrega..."
-              className="w-full px-3.5 py-2.5 text-sm bg-white border border-zinc-200 rounded-xl focus:outline-none focus:border-zinc-900"
+              className="w-full px-3.5 py-2.5 text-sm bg-white dark:bg-[#1B1B1F] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-xl placeholder:text-zinc-400 dark:placeholder:text-zinc-500 focus:outline-none focus:border-zinc-900 dark:focus:border-[#F4B6CE]/70"
             />
           </div>
         </div>
 
-        <div className="pt-3 border-t border-zinc-200/70 space-y-3">
+        <div className="pt-3 border-t border-zinc-200/70 dark:border-[#26262B] space-y-3">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-zinc-600">Estado de pago inicial</span>
+            <span className="text-xs font-medium text-zinc-600 dark:text-zinc-300">Estado de pago inicial</span>
             {!esAdmin && (
-              <span className="text-[11px] text-zinc-400 inline-flex items-center gap-1">
+              <span className="text-[11px] text-zinc-400 dark:text-zinc-500 inline-flex items-center gap-1">
                 <Lock className="w-3 h-3" strokeWidth={1.5} /> Solo Administración confirma pagos
               </span>
             )}
@@ -643,8 +643,8 @@ export function NuevoPedidoView({
                   onClick={() => setForm((prev) => ({ ...prev, pagoTipo: tipo }))}
                   className={`px-3 py-2 rounded-xl text-xs font-medium border transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
                     activo
-                      ? 'bg-zinc-900 text-white border-zinc-900'
-                      : 'bg-white text-zinc-700 border-zinc-200 hover:bg-zinc-50'
+                      ? 'bg-zinc-900 text-white border-zinc-900 dark:bg-zinc-100 dark:text-zinc-950 dark:border-zinc-100'
+                      : 'bg-white text-zinc-700 border-zinc-200 hover:bg-zinc-50 dark:bg-[#1B1B1F] dark:text-zinc-300 dark:border-[#2E2E35] dark:hover:bg-[#24242B]'
                   }`}
                 >
                   {tipo === 'Transferencia / Efectivo' ? 'Pagado / Seña' : tipo}
@@ -655,7 +655,7 @@ export function NuevoPedidoView({
 
           {esAdmin && form.pagoTipo === 'Transferencia / Efectivo' && (
             <div>
-              <label className="block text-xs font-medium text-zinc-600 mb-1">
+              <label className="block text-xs font-medium text-zinc-600 dark:text-zinc-300 mb-1">
                 Monto acreditado (vacío = total facturado)
               </label>
               <input
@@ -663,7 +663,7 @@ export function NuevoPedidoView({
                 value={form.montoAbonadoInput}
                 onChange={(e) => setForm((prev) => ({ ...prev, montoAbonadoInput: e.target.value }))}
                 placeholder={totalesBorrador.totalFacturado > 0 ? String(totalesBorrador.totalFacturado) : 'Total'}
-                className="w-full px-3.5 py-2 text-sm bg-white border border-zinc-200 rounded-xl tabular-nums"
+                className="w-full px-3.5 py-2 text-sm bg-white dark:bg-[#1B1B1F] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-xl placeholder:text-zinc-400 dark:placeholder:text-zinc-500 tabular-nums"
               />
             </div>
           )}
@@ -671,7 +671,7 @@ export function NuevoPedidoView({
           {esAdmin && form.pagoTipo === 'Cheque' && (
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <div>
-                <label className="block text-xs font-medium text-zinc-600 mb-1">Fecha recepción</label>
+                <label className="block text-xs font-medium text-zinc-600 dark:text-zinc-300 mb-1">Fecha recepción</label>
                 <input
                   type="date"
                   value={form.fechaRecepcionCheque}
@@ -682,26 +682,26 @@ export function NuevoPedidoView({
                       fechaAcreditacionCheque: addDaysISO(e.target.value, 30)
                     }))
                   }
-                  className="w-full px-3 py-2 text-xs bg-white border border-zinc-200 rounded-xl tabular-nums"
+                  className="w-full px-3 py-2 text-xs bg-white dark:bg-[#1B1B1F] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-xl tabular-nums"
                 />
               </div>
               <div>
-                <label className="block text-xs font-medium text-zinc-600 mb-1">Acreditación (+30d)</label>
+                <label className="block text-xs font-medium text-zinc-600 dark:text-zinc-300 mb-1">Acreditación (+30d)</label>
                 <input
                   type="date"
                   value={form.fechaAcreditacionCheque}
                   onChange={(e) => setForm((prev) => ({ ...prev, fechaAcreditacionCheque: e.target.value }))}
-                  className="w-full px-3 py-2 text-xs bg-white border border-zinc-200 rounded-xl tabular-nums"
+                  className="w-full px-3 py-2 text-xs bg-white dark:bg-[#1B1B1F] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-xl tabular-nums"
                 />
               </div>
               <div>
-                <label className="block text-xs font-medium text-zinc-600 mb-1">Detalle cheque</label>
+                <label className="block text-xs font-medium text-zinc-600 dark:text-zinc-300 mb-1">Detalle cheque</label>
                 <input
                   type="text"
                   value={form.detalleCheque}
                   onChange={(e) => setForm((prev) => ({ ...prev, detalleCheque: e.target.value }))}
                   placeholder="Banco / N.º"
-                  className="w-full px-3 py-2 text-xs bg-white border border-zinc-200 rounded-xl"
+                  className="w-full px-3 py-2 text-xs bg-white dark:bg-[#1B1B1F] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-xl placeholder:text-zinc-400 dark:placeholder:text-zinc-500"
                 />
               </div>
             </div>
@@ -709,17 +709,19 @@ export function NuevoPedidoView({
         </div>
       </section>
 
-      <section className="bg-white rounded-2xl border border-[#EAEAEA] shadow-[0_1px_2px_rgba(0,0,0,0.03)] p-6 space-y-4">
+      <section className="bg-white dark:bg-[#141417] rounded-2xl border border-[#EAEAEA] dark:border-[#26262B] shadow-[0_1px_2px_rgba(0,0,0,0.03)] p-6 space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">
+          <h2 className="text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">
             2. Artículos (LISTA N° 006 y adicionales)
           </h2>
-          <div className="inline-flex items-center p-0.5 rounded-full bg-zinc-100 border border-zinc-200/70">
+          <div className="inline-flex items-center p-0.5 rounded-full bg-zinc-100 dark:bg-[#1B1B1F] border border-zinc-200/70 dark:border-[#26262B]">
             <button
               type="button"
               onClick={() => setModoCargaManual(false)}
               className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
-                !modoCargaManual ? 'bg-white text-[#111111] shadow-sm' : 'text-zinc-500'
+                !modoCargaManual
+                  ? 'bg-white text-[#111111] dark:bg-[#2A2A32] dark:text-white shadow-sm'
+                  : 'text-zinc-500 dark:text-zinc-400'
               }`}
             >
               Subir Excel
@@ -728,7 +730,9 @@ export function NuevoPedidoView({
               type="button"
               onClick={() => setModoCargaManual(true)}
               className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
-                modoCargaManual ? 'bg-white text-[#111111] shadow-sm' : 'text-zinc-500'
+                modoCargaManual
+                  ? 'bg-white text-[#111111] dark:bg-[#2A2A32] dark:text-white shadow-sm'
+                  : 'text-zinc-500 dark:text-zinc-400'
               }`}
             >
               Cargar cantidades a mano
@@ -752,17 +756,17 @@ export function NuevoPedidoView({
             onClick={() => fileInputListaRef.current?.click()}
             className={`cursor-pointer rounded-2xl border-2 border-dashed px-6 py-8 text-center transition-colors ${
               arrastrandoArchivo
-                ? 'border-[#F4B6CE] bg-pink-50/40'
-                : 'border-zinc-200 hover:border-zinc-300 bg-[#FAFAFA]'
+                ? 'border-[#F4B6CE] bg-pink-50/40 dark:border-[#F4B6CE] dark:bg-[#F4B6CE]/10'
+                : 'border-zinc-200 hover:border-zinc-300 bg-[#FAFAFA] dark:bg-[#101014] dark:border-[#2E2E36] dark:hover:border-[#F4B6CE]/50'
             }`}
           >
-            <FileSpreadsheet className="w-7 h-7 mx-auto text-zinc-400" strokeWidth={1.5} />
-            <p className="mt-2.5 text-sm font-medium text-[#111111]">
+            <FileSpreadsheet className="w-7 h-7 mx-auto text-zinc-400 dark:text-zinc-500" strokeWidth={1.5} />
+            <p className="mt-2.5 text-sm font-medium text-[#111111] dark:text-[#F4F4F5]">
               {nombreArchivoCargado
                 ? `Cargado: ${nombreArchivoCargado}`
                 : 'Arrastrá la planilla LISTA N° 006 o hacé clic para elegir'}
             </p>
-            <p className="mt-1 text-xs text-zinc-400">Soporta .xlsx, .xls y .csv · Lectura exacta inmediata</p>
+            <p className="mt-1 text-xs text-zinc-400 dark:text-zinc-500">Soporta .xlsx, .xls y .csv · Lectura exacta inmediata</p>
           </div>
         ) : (
           <div className="space-y-3">
@@ -771,23 +775,23 @@ export function NuevoPedidoView({
               value={busquedaCatalogo}
               onChange={(e) => setBusquedaCatalogo(e.target.value)}
               placeholder="Filtrar catálogo por nombre, código o rubro..."
-              className="w-full px-3.5 py-2 text-sm bg-white border border-zinc-200 rounded-xl focus:outline-none focus:border-zinc-900"
+              className="w-full px-3.5 py-2 text-sm bg-white dark:bg-[#1B1B1F] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-xl placeholder:text-zinc-400 dark:placeholder:text-zinc-500 focus:outline-none focus:border-zinc-900 dark:focus:border-[#F4B6CE]/70"
             />
-            <div className="max-h-72 overflow-y-auto divide-y divide-zinc-200/60 border border-zinc-200/80 rounded-xl">
+            <div className="max-h-72 overflow-y-auto divide-y divide-zinc-200/60 dark:divide-[#26262B]/80 border border-zinc-200/80 dark:border-[#26262B] rounded-xl">
               {catalogoFiltradoManual.map((prod) => {
                 const val = cantidadesManuales[prod.idGrupo] ?? 0;
                 return (
                   <div key={prod.idGrupo} className="px-3.5 py-2.5 flex items-center justify-between gap-3">
                     <div className="min-w-0">
-                      <div className="text-xs font-medium text-[#111111] truncate flex items-center gap-1.5">
+                      <div className="text-xs font-medium text-[#111111] dark:text-[#F4F4F5] truncate flex items-center gap-1.5">
                         <span className="truncate">{prod.nombre}</span>
                         {prod.esCustom && (
-                          <span className="px-1.5 py-0.5 rounded bg-[#FCE7F3] text-[#111111] text-[10px] font-medium shrink-0">
+                          <span className="px-1.5 py-0.5 rounded bg-[#FCE7F3] text-[#111111] dark:bg-[#F4B6CE]/15 dark:text-[#FCE7F3] text-[10px] font-medium shrink-0">
                             Extra
                           </span>
                         )}
                       </div>
-                      <div className="text-[11px] text-zinc-400 tabular-nums">
+                      <div className="text-[11px] text-zinc-400 dark:text-zinc-500 tabular-nums">
                         {prod.variantes.map((v) => v.codigo).join(' / ')} · {prod.rubro} ·{' '}
                         {formatARSCompacto(prod.precioNeto)} neto
                       </div>
@@ -798,7 +802,7 @@ export function NuevoPedidoView({
                       value={val === 0 ? '' : val}
                       onChange={(e) => handleCambioCantidadManual(prod, e.target.value)}
                       placeholder="0"
-                      className="w-20 px-2.5 py-1.5 text-sm text-right bg-white border border-zinc-200 rounded-lg tabular-nums focus:outline-none focus:border-zinc-900"
+                      className="w-20 px-2.5 py-1.5 text-sm text-right bg-white dark:bg-[#1B1B1F] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-lg tabular-nums placeholder:text-zinc-400 dark:placeholder:text-zinc-500 focus:outline-none focus:border-zinc-900 dark:focus:border-[#F4B6CE]/70"
                     />
                   </div>
                 );
@@ -812,7 +816,7 @@ export function NuevoPedidoView({
             <button
               type="button"
               onClick={() => setMostrarFueraPlanilla((prev) => !prev)}
-              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-medium bg-zinc-50 hover:bg-zinc-100 border border-zinc-200 text-[#111111] transition-colors"
+              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-medium bg-zinc-50 hover:bg-zinc-100 border border-zinc-200 text-[#111111] dark:bg-[#1B1B1F] dark:hover:bg-[#24242B] dark:border-[#2E2E35] dark:text-[#F4F4F5] transition-colors"
               title="Ej. Pilusos o artículos nuevos"
             >
               <Plus className="w-3.5 h-3.5" strokeWidth={1.75} />
@@ -821,7 +825,7 @@ export function NuevoPedidoView({
             <button
               type="button"
               onClick={handleCargarEjemploLista006}
-              className="text-xs text-zinc-400 hover:text-[#111111] underline underline-offset-2 transition-colors"
+              className="text-xs text-zinc-400 hover:text-[#111111] dark:text-zinc-500 dark:hover:text-[#F4F4F5] underline underline-offset-2 transition-colors"
             >
               Probar con planilla de ejemplo
             </button>
@@ -835,7 +839,7 @@ export function NuevoPedidoView({
                 setAdvertenciasExcel([]);
                 setNombreArchivoCargado('');
               }}
-              className="text-xs text-zinc-400 hover:text-red-600 transition-colors"
+              className="text-xs text-zinc-400 hover:text-red-600 dark:hover:text-red-400 transition-colors"
             >
               Vaciar artículos
             </button>
@@ -845,17 +849,17 @@ export function NuevoPedidoView({
         {mostrarFueraPlanilla && (
           <form
             onSubmit={(e) => void handleAgregarFueraPlanilla(e)}
-            className="bg-[#FAFAFA] rounded-2xl border border-zinc-200/80 p-4 space-y-3.5 text-xs"
+            className="bg-[#FAFAFA] dark:bg-[#1B1B1F] rounded-2xl border border-zinc-200/80 dark:border-[#26262B] p-4 space-y-3.5 text-xs"
           >
             <div className="flex items-center justify-between">
               <div>
-                <div className="font-semibold text-[#111111]">Agregar producto fuera de planilla</div>
-                <div className="text-[11px] text-zinc-500">Ej. Pilusos o artículos nuevos</div>
+                <div className="font-semibold text-[#111111] dark:text-[#F4F4F5]">Agregar producto fuera de planilla</div>
+                <div className="text-[11px] text-zinc-500 dark:text-zinc-400">Ej. Pilusos o artículos nuevos</div>
               </div>
               <button
                 type="button"
                 onClick={() => setMostrarFueraPlanilla(false)}
-                className="p-1 text-zinc-400 hover:text-zinc-800"
+                className="p-1 text-zinc-400 hover:text-zinc-800 dark:hover:text-[#F4F4F5]"
               >
                 <X className="w-4 h-4" strokeWidth={1.5} />
               </button>
@@ -863,23 +867,23 @@ export function NuevoPedidoView({
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
-                <label className="block text-[11px] text-zinc-500 mb-1">Nombre del producto *</label>
+                <label className="block text-[11px] text-zinc-500 dark:text-zinc-400 mb-1">Nombre del producto *</label>
                 <input
                   type="text"
                   value={fpNombre}
                   onChange={(e) => setFpNombre(e.target.value)}
                   placeholder="Ej. Piluso Shark"
-                  className="w-full px-3 py-2 bg-white border border-zinc-200 rounded-xl"
+                  className="w-full px-3 py-2 bg-white dark:bg-[#141417] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-xl placeholder:text-zinc-400 dark:placeholder:text-zinc-500"
                 />
               </div>
 
               <div>
-                <label className="block text-[11px] text-zinc-500 mb-1">Rubro *</label>
+                <label className="block text-[11px] text-zinc-500 dark:text-zinc-400 mb-1">Rubro *</label>
                 <div className="flex gap-2">
                   <select
                     value={fpRubroSel}
                     onChange={(e) => setFpRubroSel(e.target.value)}
-                    className="flex-1 px-3 py-2 bg-white border border-zinc-200 rounded-xl"
+                    className="flex-1 px-3 py-2 bg-white dark:bg-[#141417] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-xl"
                   >
                     {rubrosDisponibles.map((r) => (
                       <option key={r} value={r}>
@@ -894,14 +898,14 @@ export function NuevoPedidoView({
                       value={fpRubroCustom}
                       onChange={(e) => setFpRubroCustom(e.target.value)}
                       placeholder="Ej. PILUSOS"
-                      className="w-28 px-3 py-2 bg-white border border-zinc-200 rounded-xl uppercase"
+                      className="w-28 px-3 py-2 bg-white dark:bg-[#141417] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-xl uppercase placeholder:text-zinc-400 dark:placeholder:text-zinc-500"
                     />
                   )}
                 </div>
               </div>
 
               <div>
-                <label className="block text-[11px] text-zinc-500 mb-1">Precio neto unitario ($)</label>
+                <label className="block text-[11px] text-zinc-500 dark:text-zinc-400 mb-1">Precio neto unitario ($)</label>
                 <input
                   type="number"
                   min={0}
@@ -909,23 +913,23 @@ export function NuevoPedidoView({
                   value={fpPrecioNeto}
                   onChange={(e) => setFpPrecioNeto(e.target.value)}
                   placeholder="0.00"
-                  className="w-full px-3 py-2 bg-white border border-zinc-200 rounded-xl tabular-nums"
+                  className="w-full px-3 py-2 bg-white dark:bg-[#141417] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-xl tabular-nums placeholder:text-zinc-400 dark:placeholder:text-zinc-500"
                 />
-                <div className="text-[11px] text-zinc-400 mt-1 tabular-nums">
+                <div className="text-[11px] text-zinc-400 dark:text-zinc-500 mt-1 tabular-nums">
                   Con IVA 21%: {formatARS(fpPrecioConIva)}
                 </div>
               </div>
 
               <div>
-                <label className="block text-[11px] text-zinc-500 mb-1">Variantes</label>
+                <label className="block text-[11px] text-zinc-500 dark:text-zinc-400 mb-1">Variantes</label>
                 <div className="grid grid-cols-2 gap-1.5">
                   <button
                     type="button"
                     onClick={() => setFpTipoVar('unico')}
                     className={`py-2 px-3 rounded-xl border font-medium ${
                       fpTipoVar === 'unico'
-                        ? 'bg-zinc-900 text-white border-zinc-900'
-                        : 'bg-white text-zinc-700 border-zinc-200'
+                        ? 'bg-zinc-900 text-white border-zinc-900 dark:bg-zinc-100 dark:text-zinc-950 dark:border-zinc-100'
+                        : 'bg-white text-zinc-700 border-zinc-200 dark:bg-[#141417] dark:text-zinc-300 dark:border-[#2E2E35]'
                     }`}
                   >
                     Único
@@ -935,8 +939,8 @@ export function NuevoPedidoView({
                     onClick={() => setFpTipoVar('multiple')}
                     className={`py-2 px-3 rounded-xl border font-medium ${
                       fpTipoVar === 'multiple'
-                        ? 'bg-zinc-900 text-white border-zinc-900'
-                        : 'bg-white text-zinc-700 border-zinc-200'
+                        ? 'bg-zinc-900 text-white border-zinc-900 dark:bg-zinc-100 dark:text-zinc-950 dark:border-zinc-100'
+                        : 'bg-white text-zinc-700 border-zinc-200 dark:bg-[#141417] dark:text-zinc-300 dark:border-[#2E2E35]'
                     }`}
                   >
                     Con talles o colores
@@ -948,30 +952,30 @@ export function NuevoPedidoView({
             {fpTipoVar === 'unico' ? (
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-[11px] text-zinc-500 mb-1">Código (opcional)</label>
+                  <label className="block text-[11px] text-zinc-500 dark:text-zinc-400 mb-1">Código (opcional)</label>
                   <input
                     type="text"
                     value={fpCodigoUnico}
                     onChange={(e) => setFpCodigoUnico(e.target.value)}
                     placeholder="Vacío → automático"
-                    className="w-full px-3 py-2 bg-white border border-zinc-200 rounded-xl tabular-nums uppercase"
+                    className="w-full px-3 py-2 bg-white dark:bg-[#141417] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-xl tabular-nums uppercase placeholder:text-zinc-400 dark:placeholder:text-zinc-500"
                   />
                 </div>
                 <div>
-                  <label className="block text-[11px] text-zinc-500 mb-1">Cantidad pedida *</label>
+                  <label className="block text-[11px] text-zinc-500 dark:text-zinc-400 mb-1">Cantidad pedida *</label>
                   <input
                     type="number"
                     min={1}
                     value={fpCantidadTotal}
                     onChange={(e) => setFpCantidadTotal(e.target.value)}
-                    className="w-full px-3 py-2 bg-white border border-zinc-200 rounded-xl tabular-nums"
+                    className="w-full px-3 py-2 bg-white dark:bg-[#141417] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-xl tabular-nums"
                   />
                 </div>
               </div>
             ) : (
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <span className="text-[11px] text-zinc-500">
+                  <span className="text-[11px] text-zinc-500 dark:text-zinc-400">
                     Opciones (indicá cantidad en cada una o dejá vacío para definir después)
                   </span>
                   <button
@@ -979,7 +983,7 @@ export function NuevoPedidoView({
                     onClick={() =>
                       setFpVariantes((prev) => [...prev, { codigo: '', etiqueta: '', cantidad: '' }])
                     }
-                    className="text-[11px] font-medium text-zinc-800 hover:underline inline-flex items-center gap-1"
+                    className="text-[11px] font-medium text-zinc-800 dark:text-zinc-200 hover:underline inline-flex items-center gap-1"
                   >
                     <Plus className="w-3 h-3" strokeWidth={1.75} /> Agregar variante
                   </button>
@@ -995,7 +999,7 @@ export function NuevoPedidoView({
                         )
                       }
                       placeholder="Cód. (opc.)"
-                      className="w-24 px-2.5 py-1.5 bg-white border border-zinc-200 rounded-lg tabular-nums uppercase"
+                      className="w-24 px-2.5 py-1.5 bg-white dark:bg-[#141417] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-lg tabular-nums uppercase placeholder:text-zinc-400 dark:placeholder:text-zinc-500"
                     />
                     <input
                       type="text"
@@ -1006,7 +1010,7 @@ export function NuevoPedidoView({
                         )
                       }
                       placeholder={`Talle o color #${idx + 1}`}
-                      className="flex-1 px-2.5 py-1.5 bg-white border border-zinc-200 rounded-lg"
+                      className="flex-1 px-2.5 py-1.5 bg-white dark:bg-[#141417] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-lg placeholder:text-zinc-400 dark:placeholder:text-zinc-500"
                     />
                     <input
                       type="number"
@@ -1018,13 +1022,13 @@ export function NuevoPedidoView({
                         )
                       }
                       placeholder="Cant."
-                      className="w-20 px-2.5 py-1.5 bg-white border border-zinc-200 rounded-lg text-right tabular-nums"
+                      className="w-20 px-2.5 py-1.5 bg-white dark:bg-[#141417] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-lg text-right tabular-nums placeholder:text-zinc-400 dark:placeholder:text-zinc-500"
                     />
                     {fpVariantes.length > 2 && (
                       <button
                         type="button"
                         onClick={() => setFpVariantes((prev) => prev.filter((_, i) => i !== idx))}
-                        className="p-1.5 text-zinc-400 hover:text-red-600"
+                        className="p-1.5 text-zinc-400 hover:text-red-600 dark:hover:text-red-400"
                         aria-label="Quitar variante"
                       >
                         <Trash2 className="w-3.5 h-3.5" strokeWidth={1.5} />
@@ -1035,7 +1039,7 @@ export function NuevoPedidoView({
 
                 {fpVariantes.every((v) => !(parseInt(v.cantidad, 10) > 0)) && (
                   <div>
-                    <label className="block text-[11px] text-zinc-500 mb-1">
+                    <label className="block text-[11px] text-zinc-500 dark:text-zinc-400 mb-1">
                       Cantidad total pendiente de definir
                     </label>
                     <input
@@ -1043,19 +1047,19 @@ export function NuevoPedidoView({
                       min={1}
                       value={fpCantidadTotal}
                       onChange={(e) => setFpCantidadTotal(e.target.value)}
-                      className="w-32 px-3 py-1.5 bg-white border border-zinc-200 rounded-lg tabular-nums"
+                      className="w-32 px-3 py-1.5 bg-white dark:bg-[#141417] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-lg tabular-nums"
                     />
                   </div>
                 )}
               </div>
             )}
 
-            <label className="flex items-center gap-2 pt-1 cursor-pointer select-none text-zinc-700">
+            <label className="flex items-center gap-2 pt-1 cursor-pointer select-none text-zinc-700 dark:text-zinc-300">
               <input
                 type="checkbox"
                 checked={fpGuardarEnCatalogo}
                 onChange={(e) => setFpGuardarEnCatalogo(e.target.checked)}
-                className="w-4 h-4 rounded border-zinc-300 text-zinc-900 accent-zinc-900"
+                className="w-4 h-4 rounded border-zinc-300 dark:border-zinc-600 text-zinc-900 accent-zinc-900 dark:accent-[#F4B6CE]"
               />
               <span>Guardar en el catálogo para próximos pedidos</span>
             </label>
@@ -1064,14 +1068,14 @@ export function NuevoPedidoView({
               <button
                 type="button"
                 onClick={() => setMostrarFueraPlanilla(false)}
-                className="px-3.5 py-2 rounded-full border border-zinc-200 bg-white text-zinc-600"
+                className="px-3.5 py-2 rounded-full border border-zinc-200 dark:border-[#2E2E35] bg-white dark:bg-[#141417] text-zinc-600 dark:text-zinc-300"
               >
                 Cancelar
               </button>
               <button
                 type="submit"
                 disabled={fpGuardando}
-                className="px-4 py-2 rounded-full bg-zinc-900 text-white font-medium hover:bg-zinc-800 disabled:opacity-50"
+                className="px-4 py-2 rounded-full bg-zinc-900 text-white font-medium hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-white disabled:opacity-50"
               >
                 {fpGuardando ? 'Guardando...' : 'Agregar al pedido'}
               </button>
@@ -1081,21 +1085,21 @@ export function NuevoPedidoView({
       </section>
 
       {advertenciasExcel.length > 0 && (
-        <section className="bg-red-50/70 border border-red-200 rounded-2xl p-5 space-y-3">
+        <section className="bg-red-50/70 border border-red-200 dark:bg-red-500/10 dark:border-red-500/25 rounded-2xl p-5 space-y-3">
           <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2 text-xs font-semibold text-red-800">
-              <AlertTriangle className="w-4 h-4 text-red-600" strokeWidth={1.75} />
+            <div className="flex items-center gap-2 text-xs font-semibold text-red-800 dark:text-red-300">
+              <AlertTriangle className="w-4 h-4 text-red-600 dark:text-red-400" strokeWidth={1.75} />
               <span>Errores bloqueantes detectados en el Excel ({advertenciasExcel.length})</span>
             </div>
             <button
               type="button"
               onClick={() => setAdvertenciasExcel([])}
-              className="text-[11px] font-medium text-red-700 hover:underline"
+              className="text-[11px] font-medium text-red-700 dark:text-red-300 hover:underline"
             >
               Confirmar y descartar avisos
             </button>
           </div>
-          <ul className="space-y-1 text-xs text-red-700">
+          <ul className="space-y-1 text-xs text-red-700 dark:text-red-300/90">
             {advertenciasExcel.map((adv, idx) => (
               <li key={`${adv.hoja}-${adv.fila}-${idx}`} className="tabular-nums">
                 • Hoja <strong>{adv.hoja}</strong>, Fila <strong>{adv.fila}</strong> (cód. {adv.codigo}):{' '}
@@ -1107,9 +1111,9 @@ export function NuevoPedidoView({
       )}
 
       {totalesBorrador.faltantes > 0 && (
-        <section className="bg-red-50/60 border border-red-200/80 rounded-2xl p-5 space-y-3">
+        <section className="bg-red-50/60 border border-red-200/80 dark:bg-red-500/10 dark:border-red-500/25 rounded-2xl p-5 space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="text-xs font-semibold text-red-800">
+            <div className="text-xs font-semibold text-red-800 dark:text-red-300">
               Falta definir talle o color en {totalesBorrador.faltantes} artículo(s)
             </div>
             <button
@@ -1123,10 +1127,10 @@ export function NuevoPedidoView({
                 );
                 onCopyText('borrador-wsp', msg, 'Mensaje de consulta copiado para WhatsApp.');
               }}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-white border border-red-200 text-red-700 hover:bg-red-50"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-white border border-red-200 text-red-700 hover:bg-red-50 dark:bg-[#1B1B1F] dark:border-red-500/30 dark:text-red-300 dark:hover:bg-red-500/15"
             >
               {copiadoId === 'borrador-wsp' ? (
-                <Check className="w-3.5 h-3.5 text-emerald-600" strokeWidth={1.75} />
+                <Check className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" strokeWidth={1.75} />
               ) : (
                 <MessageCircle className="w-3.5 h-3.5" strokeWidth={1.5} />
               )}
@@ -1144,16 +1148,16 @@ export function NuevoPedidoView({
                 const key = `borr_${l.idLinea}`;
                 const cur = resolucionesManual[key] ?? variantes.map(() => '0');
                 return (
-                  <div key={l.idLinea} className="bg-white rounded-xl border border-red-200/70 p-3.5 space-y-2">
+                  <div key={l.idLinea} className="bg-white dark:bg-[#1B1B1F] rounded-xl border border-red-200/70 dark:border-red-500/25 p-3.5 space-y-2">
                     <div className="flex items-center justify-between text-xs">
-                      <span className="font-semibold text-[#111111]">{l.nombreProducto}</span>
-                      <span className="font-semibold text-red-700 tabular-nums">Total: {l.cantidadTotal} u.</span>
+                      <span className="font-semibold text-[#111111] dark:text-[#F4F4F5]">{l.nombreProducto}</span>
+                      <span className="font-semibold text-red-700 dark:text-red-300 tabular-nums">Total: {l.cantidadTotal} u.</span>
                     </div>
-                    {l.motivoRevision && <p className="text-[11px] text-red-600">{l.motivoRevision}</p>}
+                    {l.motivoRevision && <p className="text-[11px] text-red-600 dark:text-red-400">{l.motivoRevision}</p>}
                     <div className="flex flex-wrap items-end gap-2">
                       {variantes.map((v, vIdx) => (
                         <div key={v.codigo} className="flex-1 min-w-[110px]">
-                          <label className="block text-[11px] text-zinc-500 mb-1">
+                          <label className="block text-[11px] text-zinc-500 dark:text-zinc-400 mb-1">
                             {v.etiqueta} ({v.codigo})
                           </label>
                           <input
@@ -1167,7 +1171,7 @@ export function NuevoPedidoView({
                               );
                               setResolucionesManual((prev) => ({ ...prev, [key]: nextArr }));
                             }}
-                            className="w-full px-2.5 py-1.5 text-xs bg-white border border-zinc-200 rounded-lg tabular-nums"
+                            className="w-full px-2.5 py-1.5 text-xs bg-white dark:bg-[#141417] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-lg tabular-nums"
                           />
                         </div>
                       ))}
@@ -1179,7 +1183,7 @@ export function NuevoPedidoView({
                             variantes.map((_, idx) => parseInt(cur[idx] ?? '0', 10) || 0)
                           )
                         }
-                        className="px-3.5 py-1.5 rounded-full text-xs font-medium bg-zinc-900 hover:bg-zinc-800 text-white"
+                        className="px-3.5 py-1.5 rounded-full text-xs font-medium bg-zinc-900 hover:bg-zinc-800 text-white dark:bg-zinc-100 dark:hover:bg-white dark:text-zinc-950"
                       >
                         Confirmar
                       </button>
@@ -1192,19 +1196,19 @@ export function NuevoPedidoView({
       )}
 
       {lineasBorrador.length > 0 && (
-        <section className="bg-white rounded-2xl border border-[#EAEAEA] shadow-[0_1px_2px_rgba(0,0,0,0.03)] p-6 space-y-4">
+        <section className="bg-white dark:bg-[#141417] rounded-2xl border border-[#EAEAEA] dark:border-[#26262B] shadow-[0_1px_2px_rgba(0,0,0,0.03)] p-6 space-y-4">
           <div className="flex items-center justify-between">
-            <h2 className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">
+            <h2 className="text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">
               3. Resumen y liquidación ({lineasBorrador.length} ítems · {totalesBorrador.totalUnidades} u.)
             </h2>
           </div>
 
-          <div className="max-h-60 overflow-y-auto divide-y divide-zinc-200/60 border border-zinc-200/70 rounded-xl">
+          <div className="max-h-60 overflow-y-auto divide-y divide-zinc-200/60 dark:divide-[#26262B]/80 border border-zinc-200/70 dark:border-[#26262B] rounded-xl">
             {lineasBorrador.map((l) => (
               <div key={l.idLinea} className="px-3.5 py-2.5 flex items-center justify-between gap-3 text-xs">
                 <div className="min-w-0">
-                  <div className="font-medium text-[#111111] truncate">{l.nombreProducto}</div>
-                  <div className="text-[11px] text-zinc-400 tabular-nums">
+                  <div className="font-medium text-[#111111] dark:text-[#F4F4F5] truncate">{l.nombreProducto}</div>
+                  <div className="text-[11px] text-zinc-400 dark:text-zinc-500 tabular-nums">
                     {l.requiereRevision
                       ? `Pendiente definir (${l.cantidadTotal} u.)`
                       : l.desglose
@@ -1214,13 +1218,13 @@ export function NuevoPedidoView({
                   </div>
                 </div>
                 <div className="flex items-center gap-3 shrink-0 tabular-nums">
-                  <span className="font-semibold text-[#111111]">
+                  <span className="font-semibold text-[#111111] dark:text-[#F4F4F5]">
                     {formatARS(round2(l.precioUnitarioNeto * l.cantidadTotal))}
                   </span>
                   <button
                     type="button"
                     onClick={() => handleEliminarLineaBorrador(l.idGrupo)}
-                    className="p-1 text-zinc-400 hover:text-red-600"
+                    className="p-1 text-zinc-400 hover:text-red-600 dark:hover:text-red-400"
                     aria-label="Quitar artículo"
                   >
                     <X className="w-3.5 h-3.5" strokeWidth={1.5} />
@@ -1231,25 +1235,25 @@ export function NuevoPedidoView({
           </div>
 
           <div className="pt-2 space-y-1.5 text-xs tabular-nums">
-            <div className="flex justify-between text-zinc-500">
+            <div className="flex justify-between text-zinc-500 dark:text-zinc-400">
               <span>Subtotal Neto</span>
               <span>{formatARS(totalesBorrador.subtotalNeto)}</span>
             </div>
             {totalesBorrador.montoDescuento > 0 && (
-              <div className="flex justify-between text-zinc-500">
+              <div className="flex justify-between text-zinc-500 dark:text-zinc-400">
                 <span>Descuento ({form.descuentoPorc}%)</span>
                 <span>-{formatARS(totalesBorrador.montoDescuento)}</span>
               </div>
             )}
-            <div className="flex justify-between text-zinc-500">
+            <div className="flex justify-between text-zinc-500 dark:text-zinc-400">
               <span>Base Imponible (Total B)</span>
               <span>{formatARS(totalesBorrador.baseImponible)}</span>
             </div>
-            <div className="flex justify-between text-zinc-500">
+            <div className="flex justify-between text-zinc-500 dark:text-zinc-400">
               <span>IVA 21%</span>
               <span>{formatARS(totalesBorrador.iva21)}</span>
             </div>
-            <div className="flex justify-between text-sm font-semibold text-[#111111] pt-2 border-t border-zinc-200/70">
+            <div className="flex justify-between text-sm font-semibold text-[#111111] dark:text-[#F4F4F5] pt-2 border-t border-zinc-200/70 dark:border-[#26262B]">
               <span>Total Facturado</span>
               <span>{formatARS(totalesBorrador.totalFacturado)}</span>
             </div>
@@ -1259,7 +1263,7 @@ export function NuevoPedidoView({
             type="button"
             disabled={guardandoPedido || advertenciasExcel.length > 0}
             onClick={() => void handleSubmit()}
-            className="w-full py-3 rounded-full text-sm font-medium bg-zinc-900 hover:bg-zinc-800 text-white transition-colors disabled:opacity-50"
+            className="w-full py-3 rounded-full text-sm font-medium bg-zinc-900 hover:bg-zinc-800 text-white dark:bg-zinc-100 dark:hover:bg-white dark:text-zinc-950 transition-colors disabled:opacity-50"
           >
             {guardandoPedido ? 'Guardando...' : 'Guardar pedido'}
           </button>
