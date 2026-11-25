@@ -13,7 +13,7 @@ export default async function HomePage(): Promise<React.JSX.Element> {
     session = await requireSession();
   } catch (err) {
     if (err instanceof AuthError) {
-      redirect('/login');
+      redirect('/login?revoked=1');
     }
     throw err;
   }

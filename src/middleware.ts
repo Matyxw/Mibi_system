@@ -28,8 +28,16 @@ export async function middleware(request: NextRequest): Promise<NextResponse> {
   const session = await verifySessionToken(token);
 
   if (PUBLIC_PATHS.has(pathname)) {
-    if (pathname === '/login' && session) {
-      return NextResponse.redirect(new URL('/', request.url));
+    if (pathname === '/login' && request.nextUrl.searchParams.get('revoked') === '1') {
+      const response = NextResponse.next();
+      response.cookies.set(cookieName, '', {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        path: '/',
+        maxAge: 0
+      });
+      return response;
     }
     return NextResponse.next();
   }
