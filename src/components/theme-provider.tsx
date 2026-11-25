@@ -2,7 +2,7 @@
 
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
 
-export type ThemeMode = 'light' | 'dark' | 'system';
+export type ThemeMode = 'light' | 'dark';
 export type ResolvedTheme = 'light' | 'dark';
 
 export interface ThemeContextValue {
@@ -16,66 +16,45 @@ const STORAGE_KEY = 'mibi_theme';
 
 const ThemeContext = createContext<ThemeContextValue | null>(null);
 
-const getSystemTheme = (): ResolvedTheme => {
-  if (typeof window === 'undefined') return 'light';
-  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-};
-
 const readStoredTheme = (): ThemeMode => {
-  if (typeof window === 'undefined') return 'system';
+  if (typeof window === 'undefined') return 'light';
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (raw === 'light' || raw === 'dark' || raw === 'system') {
-      return raw;
-    }
+    return window.localStorage.getItem(STORAGE_KEY) === 'dark' ? 'dark' : 'light';
   } catch {
-    // Acceso bloqueado a localStorage en modo estricto del navegador
+    return 'light';
   }
-  return 'system';
 };
 
-const applyThemeToDocument = (resolved: ResolvedTheme): void => {
+const applyThemeToDocument = (mode: ThemeMode): void => {
   if (typeof document === 'undefined') return;
   const root = document.documentElement;
-  root.classList.toggle('dark', resolved === 'dark');
-  root.style.colorScheme = resolved;
+  root.classList.toggle('dark', mode === 'dark');
+  root.style.colorScheme = mode;
 };
 
 export function ThemeProvider({ children }: { children: React.ReactNode }): React.JSX.Element {
-  const [theme, setThemeState] = useState<ThemeMode>('system');
-  const [resolvedTheme, setResolvedTheme] = useState<ResolvedTheme>('light');
+  const [theme, setThemeState] = useState<ThemeMode>('light');
 
   useEffect(() => {
     const initial = readStoredTheme();
-    const resolved = initial === 'system' ? getSystemTheme() : initial;
     setThemeState(initial);
-    setResolvedTheme(resolved);
-    applyThemeToDocument(resolved);
-  }, []);
+    applyThemeToDocument(initial);
 
-  useEffect(() => {
-    const resolved = theme === 'system' ? getSystemTheme() : theme;
-    setResolvedTheme(resolved);
-    applyThemeToDocument(resolved);
-
-    if (theme !== 'system' || typeof window === 'undefined') return;
-    const mq = window.matchMedia('(prefers-color-scheme: dark)');
-    const handleChange = (): void => {
-      const next: ResolvedTheme = mq.matches ? 'dark' : 'light';
-      setResolvedTheme(next);
-      applyThemeToDocument(next);
+    const handleStorage = (e: StorageEvent): void => {
+      if (e.key !== STORAGE_KEY) return;
+      const synced: ThemeMode = e.newValue === 'dark' ? 'dark' : 'light';
+      setThemeState(synced);
+      applyThemeToDocument(synced);
     };
-    mq.addEventListener('change', handleChange);
+    window.addEventListener('storage', handleStorage);
     return () => {
-      mq.removeEventListener('change', handleChange);
+      window.removeEventListener('storage', handleStorage);
     };
-  }, [theme]);
+  }, []);
 
   const setTheme = useCallback((next: ThemeMode): void => {
     setThemeState(next);
-    const resolved = next === 'system' ? getSystemTheme() : next;
-    setResolvedTheme(resolved);
-    applyThemeToDocument(resolved);
+    applyThemeToDocument(next);
     try {
       window.localStorage.setItem(STORAGE_KEY, next);
     } catch {
@@ -84,12 +63,11 @@ export function ThemeProvider({ children }: { children: React.ReactNode }): Reac
   }, []);
 
   const toggleTheme = useCallback((): void => {
-    const next: ThemeMode = resolvedTheme === 'dark' ? 'light' : 'dark';
-    setTheme(next);
-  }, [resolvedTheme, setTheme]);
+    setTheme(theme === 'dark' ? 'light' : 'dark');
+  }, [theme, setTheme]);
 
   return (
-    <ThemeContext.Provider value={{ theme, resolvedTheme, setTheme, toggleTheme }}>
+    <ThemeContext.Provider value={{ theme, resolvedTheme: theme, setTheme, toggleTheme }}>
       {children}
     </ThemeContext.Provider>
   );

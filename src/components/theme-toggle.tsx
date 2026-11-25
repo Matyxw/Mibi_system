@@ -23,11 +23,8 @@ export function ThemeToggle({ className = '' }: { className?: string }): React.J
       title={label}
       className={`p-1.5 rounded-full text-zinc-400 hover:text-zinc-800 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:text-[#F4F4F5] dark:hover:bg-[#1B1B1F] transition-colors ${className}`}
     >
-      {isDark ? (
-        <Sun className="w-4 h-4" strokeWidth={1.5} />
-      ) : (
-        <Moon className="w-4 h-4" strokeWidth={1.5} />
-      )}
+      <Moon className="w-4 h-4 block dark:hidden" strokeWidth={1.5} />
+      <Sun className="w-4 h-4 hidden dark:block" strokeWidth={1.5} />
     </button>
   );
 }

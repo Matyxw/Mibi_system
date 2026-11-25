@@ -10,7 +10,7 @@ const plusJakarta = Plus_Jakarta_Sans({
   display: 'swap'
 });
 
-const THEME_INIT_SCRIPT = `(function(){try{var t=localStorage.getItem('mibi_theme')||'system';var d=t==='dark'||(t==='system'&&window.matchMedia('(prefers-color-scheme: dark)').matches);document.documentElement.classList.toggle('dark',d);document.documentElement.style.colorScheme=d?'dark':'light';}catch(e){}})();`;
+const THEME_INIT_SCRIPT = `(function(){try{var d=localStorage.getItem('mibi_theme')==='dark';document.documentElement.classList.toggle('dark',d);document.documentElement.style.colorScheme=d?'dark':'light';}catch(e){}})();`;
 
 export const metadata: Metadata = {
   title: 'Mibi® — Gestión Mayorista',
