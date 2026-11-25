@@ -2,6 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  BookOpen,
   Download,
   LogOut,
   Package,
@@ -14,17 +15,25 @@ import {
   X
 } from 'lucide-react';
 import { logoutAction } from '@/app/actions/auth-actions';
+import { listarProductosCustomAction } from '@/app/actions/catalogo-actions';
 import {
   batchPedidosAction,
   crearPedidoAction,
+  enviarPedidosACuentasAction,
   importarPlanillaAction,
   listarPedidosAction,
+  marcarPedidoVistoAction,
   patchPedidoAction,
   reiniciarSistemaAction,
+  reportarIncidenciaDepositoAction,
+  resolverIncidenciaAction,
   restorePedidosAction,
+  retirarAsignacionAction,
   softDeletePedidosAction
 } from '@/app/actions/pedidos-actions';
-import { MIBI_BRAND } from '@/lib/catalogo-mibi';
+import { listarCuentasAsignablesAction } from '@/app/actions/usuarios-actions';
+import { CATALOGO_MIBI, MIBI_BRAND } from '@/lib/catalogo-mibi';
+import type { EnviarCuentasResult, SyncStatusResult } from '@/lib/dal/pedidos';
 import { aplicarResolucionLinea } from '@/lib/excel-parser';
 import {
   addDaysISO,
@@ -35,19 +44,25 @@ import {
   getTodayISO,
   round2
 } from '@/lib/finanzas';
-import type {
-  AdvertenciaExcel,
-  BatchPanelActivo,
-  FiltroPedidos,
-  LineaPedido,
-  MedioPago,
-  Pedido,
-  ResumenFinanciero,
-  SessionUser,
-  ToastState,
-  ToneStatus,
-  VistaActiva
+import {
+  isDepositoRole,
+  type AdvertenciaExcel,
+  type BatchPanelActivo,
+  type FiltroPedidos,
+  type LineaPedido,
+  type MedioPago,
+  type Pedido,
+  type PrioridadAsignacion,
+  type ProductoCatalogo,
+  type ProductoCustomRecord,
+  type ResumenFinanciero,
+  type SessionUser,
+  type ToastState,
+  type ToneStatus,
+  type UsuarioEquipo,
+  type VistaActiva
 } from '@/lib/types';
+import { CatalogoModal } from './catalogo-modal';
 import { EquipoModal } from './equipo-modal';
 import { FloatingBatchBar } from './floating-batch-bar';
 import { MibiLogo } from './mibi-logo';
@@ -55,7 +70,7 @@ import { crearFormInicial, NuevoPedidoView, type FormNuevoPedidoState } from './
 import { PedidoDrawer } from './pedido-drawer';
 import { PedidosTable } from './pedidos-table';
 
-const LS_FILTERS_KEY = 'mibi_erp_filtros_v2';
+const LS_FILTERS_KEY = 'mibi_erp_filtros_v3';
 
 interface PendingUndoDelete {
   pedidos: Pedido[];
@@ -101,18 +116,30 @@ const descargarResponseBlob = async (res: Response, fallbackName: string): Promi
 interface ErpShellProps {
   session: SessionUser;
   initialPedidos: Pedido[];
+  initialCatalogoCustom: ProductoCustomRecord[];
+  initialCuentasAsignables: UsuarioEquipo[];
   isLocalDev: boolean;
 }
 
-export function ErpShell({ session, initialPedidos, isLocalDev }: ErpShellProps): React.JSX.Element {
+export function ErpShell({
+  session,
+  initialPedidos,
+  initialCatalogoCustom,
+  initialCuentasAsignables,
+  isLocalDev
+}: ErpShellProps): React.JSX.Element {
   const esAdmin = session.rol === 'ADMIN';
+  const esDeposito = isDepositoRole(session.rol);
 
   const [pedidos, setPedidos] = useState<Pedido[]>(initialPedidos);
+  const [productosCustom, setProductosCustom] = useState<ProductoCustomRecord[]>(initialCatalogoCustom);
+  const [cuentasAsignables, setCuentasAsignables] = useState<UsuarioEquipo[]>(initialCuentasAsignables);
   const [vista, setVista] = useState<VistaActiva>('pedidos');
   const [busqueda, setBusqueda] = useState<string>('');
   const [filtro, setFiltro] = useState<FiltroPedidos>('todos');
   const [drawerPedidoId, setDrawerPedidoId] = useState<string | null>(null);
   const [modalEquipoAbierto, setModalEquipoAbierto] = useState<boolean>(false);
+  const [modalCatalogoAbierto, setModalCatalogoAbierto] = useState<boolean>(false);
   const [toast, setToast] = useState<ToastState | null>(null);
   const [copiadoId, setCopiadoId] = useState<string | null>(null);
   const [confirmReiniciar, setConfirmReiniciar] = useState<boolean>(false);
@@ -132,10 +159,25 @@ export function ErpShell({ session, initialPedidos, isLocalDev }: ErpShellProps)
   const toastTimerRef = useRef<number | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const fileInputGeneralRef = useRef<HTMLInputElement | null>(null);
-  const lastSyncRef = useRef<{ maxUpdatedAt: number; activeCount: number }>({
-    maxUpdatedAt: initialPedidos.reduce((acc, p) => Math.max(acc, p.updatedAt), 0),
-    activeCount: initialPedidos.length
+  const lastSyncRef = useRef<{ fingerprint: string }>({
+    fingerprint: `${initialPedidos.length}:init:${initialPedidos.reduce((acc, p) => Math.max(acc, p.updatedAt), 0)}`
   });
+
+  const catalogoCompleto = useMemo<ProductoCatalogo[]>(() => {
+    const customMapped: ProductoCatalogo[] = productosCustom
+      .filter((c) => c.activo)
+      .map((c) => ({
+        idGrupo: c.idGrupo,
+        nombre: c.nombre,
+        rubro: c.rubro,
+        precioNeto: c.precioNeto,
+        variantes: c.variantes,
+        esCustom: true,
+        activo: c.activo,
+        customId: c.id
+      }));
+    return [...CATALOGO_MIBI, ...customMapped];
+  }, [productosCustom]);
 
   const notify = useCallback((texto: string, tone: ToneStatus = 'neutral'): void => {
     if (toastTimerRef.current !== null) {
@@ -166,13 +208,30 @@ export function ErpShell({ session, initialPedidos, isLocalDev }: ErpShellProps)
       const obj = JSON.parse(raw) as Record<string, unknown>;
       if (typeof obj['busqueda'] === 'string') setBusqueda(obj['busqueda']);
       const f = obj['filtro'];
-      if (f === 'todos' || f === 'falta_talle' || f === 'cheques' || f === 'falta_pago' || f === 'listos') {
-        setFiltro(f);
+      const validosDeposito = new Set([
+        'todos',
+        'urgentes',
+        'por_armar',
+        'en_armado',
+        'listos',
+        'despachados'
+      ]);
+      const validosAdminVentas = new Set([
+        'todos',
+        'falta_talle',
+        'cheques',
+        'falta_pago',
+        'listos',
+        'sin_enviar_deposito',
+        'con_aviso_deposito'
+      ]);
+      if (typeof f === 'string' && (esDeposito ? validosDeposito.has(f) : validosAdminVentas.has(f))) {
+        setFiltro(f as FiltroPedidos);
       }
     } catch {
       // Ignorar
     }
-  }, []);
+  }, [esDeposito]);
 
   useEffect(() => {
     try {
@@ -182,15 +241,25 @@ export function ErpShell({ session, initialPedidos, isLocalDev }: ErpShellProps)
     }
   }, [busqueda, filtro]);
 
-  // Sincronización multiusuario ligera cada 10s (solo pestaña visible) + visibilitychange
+  const refrescarCatalogoDesdeServidor = useCallback(async (): Promise<void> => {
+    const res = await listarProductosCustomAction(false);
+    if (res.ok && res.data) {
+      setProductosCustom(res.data);
+    }
+  }, []);
+
+  const refrescarCuentasDesdeServidor = useCallback(async (): Promise<void> => {
+    if (!esAdmin) return;
+    const res = await listarCuentasAsignablesAction();
+    if (res.ok && res.data) {
+      setCuentasAsignables(res.data);
+    }
+  }, [esAdmin]);
+
   const refrescarPedidosDesdeServidor = useCallback(async (): Promise<void> => {
     const res = await listarPedidosAction();
     if (res.ok && res.data) {
       setPedidos(res.data);
-      lastSyncRef.current = {
-        maxUpdatedAt: res.data.reduce((acc, p) => Math.max(acc, p.updatedAt), 0),
-        activeCount: res.data.length
-      };
     }
   }, []);
 
@@ -201,12 +270,10 @@ export function ErpShell({ session, initialPedidos, isLocalDev }: ErpShellProps)
       try {
         const res = await fetch('/api/sync', { cache: 'no-store' });
         if (!res.ok) return;
-        const data = (await res.json()) as { maxUpdatedAt: number; activeCount: number };
-        if (
-          data.maxUpdatedAt !== lastSyncRef.current.maxUpdatedAt ||
-          data.activeCount !== lastSyncRef.current.activeCount
-        ) {
-          await refrescarPedidosDesdeServidor();
+        const data = (await res.json()) as SyncStatusResult;
+        if (data.fingerprint !== lastSyncRef.current.fingerprint) {
+          lastSyncRef.current.fingerprint = data.fingerprint;
+          await Promise.all([refrescarPedidosDesdeServidor(), refrescarCatalogoDesdeServidor()]);
         }
       } catch {
         // Reintento en el siguiente ciclo
@@ -229,7 +296,7 @@ export function ErpShell({ session, initialPedidos, isLocalDev }: ErpShellProps)
       window.clearInterval(intervalId);
       document.removeEventListener('visibilitychange', onVisibilityChange);
     };
-  }, [refrescarPedidosDesdeServidor]);
+  }, [refrescarPedidosDesdeServidor, refrescarCatalogoDesdeServidor]);
 
   // Limpiar selección de IDs inexistentes
   useEffect(() => {
@@ -265,6 +332,10 @@ export function ErpShell({ session, initialPedidos, isLocalDev }: ErpShellProps)
       );
 
       if (e.key === 'Escape') {
+        if (modalCatalogoAbierto) {
+          setModalCatalogoAbierto(false);
+          return;
+        }
         if (modalEquipoAbierto) {
           setModalEquipoAbierto(false);
           return;
@@ -296,12 +367,14 @@ export function ErpShell({ session, initialPedidos, isLocalDev }: ErpShellProps)
       }
 
       if (
+        !esDeposito &&
         !isEditing &&
         !e.metaKey &&
         !e.ctrlKey &&
         !e.altKey &&
         e.key.toLowerCase() === 'n' &&
         !modalEquipoAbierto &&
+        !modalCatalogoAbierto &&
         !drawerPedidoId
       ) {
         e.preventDefault();
@@ -311,31 +384,74 @@ export function ErpShell({ session, initialPedidos, isLocalDev }: ErpShellProps)
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [vista, modalEquipoAbierto, drawerPedidoId, batchPanel, selectedIds.size]);
+  }, [vista, esDeposito, modalEquipoAbierto, modalCatalogoAbierto, drawerPedidoId, batchPanel, selectedIds.size]);
 
   const resumenFinanciero = useMemo<ResumenFinanciero>(
     () => calcularResumenFinanciero(pedidos),
     [pedidos]
   );
 
-  const conteosFiltro = useMemo(
-    () => ({
+  const resumenDeposito = useMemo(() => {
+    let porArmar = 0;
+    let urgentes = 0;
+    let enArmado = 0;
+    let listosDespachar = 0;
+    for (const p of pedidos) {
+      if (p.estadoArmado === 'Por armar') porArmar += 1;
+      if (p.estadoArmado === 'En armado') enArmado += 1;
+      if (p.estadoArmado === 'Listo' && p.estadoEnvio === 'Pendiente') listosDespachar += 1;
+      const esUrg = p.asignaciones.some((a) => a.prioridad === 'URGENTE');
+      if (esUrg && p.estadoEnvio === 'Pendiente') urgentes += 1;
+    }
+    return { porArmar, urgentes, enArmado, listosDespachar };
+  }, [pedidos]);
+
+  const conteosFiltro = useMemo(() => {
+    const sinEnviarDeposito = pedidos.filter(
+      (p) =>
+        p.faltantesVariante === 0 &&
+        p.lineas.length > 0 &&
+        !p.asignaciones.some((a) => isDepositoRole(a.usuarioRol))
+    ).length;
+    const conAvisoDeposito = pedidos.filter((p) => Boolean(p.incidenciaDeposito)).length;
+
+    return {
       todos: pedidos.length,
       falta_talle: pedidos.filter((p) => p.faltantesVariante > 0).length,
       cheques: pedidos.filter((p) => p.medioPago === 'Cheque' && !p.chequeAcreditado).length,
       falta_pago: pedidos.filter((p) => p.estadoPago === 'Falta pago').length,
-      listos: pedidos.filter((p) => p.estadoArmado === 'Listo').length
-    }),
-    [pedidos]
-  );
+      listos: pedidos.filter((p) => p.estadoArmado === 'Listo').length,
+      sin_enviar_deposito: sinEnviarDeposito,
+      con_aviso_deposito: conAvisoDeposito,
+      urgentes: pedidos.filter((p) => p.asignaciones.some((a) => a.prioridad === 'URGENTE')).length,
+      por_armar: pedidos.filter((p) => p.estadoArmado === 'Por armar').length,
+      en_armado: pedidos.filter((p) => p.estadoArmado === 'En armado').length,
+      despachados: pedidos.filter((p) => p.estadoEnvio === 'Despachado' || p.estadoEnvio === 'Entregado').length
+    };
+  }, [pedidos]);
 
   const pedidosFiltrados = useMemo<Pedido[]>(() => {
     const q = busqueda.trim().toLowerCase();
-    return pedidos.filter((p) => {
+    const filtrados = pedidos.filter((p) => {
       if (filtro === 'falta_talle' && p.faltantesVariante === 0) return false;
       if (filtro === 'cheques' && !(p.medioPago === 'Cheque' && !p.chequeAcreditado)) return false;
       if (filtro === 'falta_pago' && p.estadoPago !== 'Falta pago') return false;
       if (filtro === 'listos' && p.estadoArmado !== 'Listo') return false;
+      if (
+        filtro === 'sin_enviar_deposito' &&
+        (p.faltantesVariante > 0 ||
+          p.lineas.length === 0 ||
+          p.asignaciones.some((a) => isDepositoRole(a.usuarioRol)))
+      ) {
+        return false;
+      }
+      if (filtro === 'con_aviso_deposito' && !p.incidenciaDeposito) return false;
+      if (filtro === 'urgentes' && !p.asignaciones.some((a) => a.prioridad === 'URGENTE')) return false;
+      if (filtro === 'por_armar' && p.estadoArmado !== 'Por armar') return false;
+      if (filtro === 'en_armado' && p.estadoArmado !== 'En armado') return false;
+      if (filtro === 'despachados' && p.estadoEnvio !== 'Despachado' && p.estadoEnvio !== 'Entregado') {
+        return false;
+      }
 
       if (!q) return true;
       return (
@@ -345,7 +461,24 @@ export function ErpShell({ session, initialPedidos, isLocalDev }: ErpShellProps)
         p.detalleResumen.toLowerCase().includes(q)
       );
     });
-  }, [pedidos, busqueda, filtro]);
+
+    if (esDeposito) {
+      return [...filtrados].sort((a, b) => {
+        const aUrg = a.asignaciones.some((x) => x.prioridad === 'URGENTE') ? 1 : 0;
+        const bUrg = b.asignaciones.some((x) => x.prioridad === 'URGENTE') ? 1 : 0;
+        if (aUrg !== bUrg) return bUrg - aUrg;
+        const aRel = a.asignaciones.some((x) => x.requiereRelectura) ? 1 : 0;
+        const bRel = b.asignaciones.some((x) => x.requiereRelectura) ? 1 : 0;
+        if (aRel !== bRel) return bRel - aRel;
+        const aDesp = a.despachoPrevisto || '9999-12-31';
+        const bDesp = b.despachoPrevisto || '9999-12-31';
+        if (aDesp !== bDesp) return aDesp.localeCompare(bDesp);
+        return b.createdAt - a.createdAt;
+      });
+    }
+
+    return filtrados;
+  }, [pedidos, busqueda, filtro, esDeposito]);
 
   const pedidosSeleccionados = useMemo<Pedido[]>(
     () => pedidos.filter((p) => selectedIds.has(p.id)),
@@ -354,6 +487,15 @@ export function ErpShell({ session, initialPedidos, isLocalDev }: ErpShellProps)
 
   const totalSeleccionado = useMemo<number>(
     () => round2(pedidosSeleccionados.reduce((acc, p) => acc + p.totalFacturado, 0)),
+    [pedidosSeleccionados]
+  );
+
+  const totalUnidadesSeleccionadas = useMemo<number>(
+    () =>
+      pedidosSeleccionados.reduce(
+        (acc, p) => acc + p.lineas.reduce((s, l) => s + l.cantidadTotal, 0),
+        0
+      ),
     [pedidosSeleccionados]
   );
 
@@ -383,6 +525,32 @@ export function ErpShell({ session, initialPedidos, isLocalDev }: ErpShellProps)
     return String(maxNum + 1).padStart(4, '0');
   }, [pedidos]);
 
+  const handleOpenDrawer = (id: string): void => {
+    setDrawerPedidoId(id);
+    if (!esAdmin) {
+      const target = pedidos.find((p) => p.id === id);
+      const miAsig = target?.asignaciones.find((a) => a.usuarioId === session.userId);
+      if (miAsig && (miAsig.vistoAt === null || miAsig.requiereRelectura)) {
+        const now = Date.now();
+        setPedidos((prev) =>
+          prev.map((p) =>
+            p.id === id
+              ? {
+                  ...p,
+                  asignaciones: p.asignaciones.map((a) =>
+                    a.usuarioId === session.userId
+                      ? { ...a, vistoAt: now, requiereRelectura: false, updatedAt: now }
+                      : a
+                  )
+                }
+              : p
+          )
+        );
+        void marcarPedidoVistoAction(id);
+      }
+    }
+  };
+
   const handlePatchPedido = async (
     pedidoId: string,
     patch: Record<string, unknown>,
@@ -395,7 +563,6 @@ export function ErpShell({ session, initialPedidos, isLocalDev }: ErpShellProps)
     }
     const updated = res.data;
     setPedidos((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
-    lastSyncRef.current.maxUpdatedAt = Math.max(lastSyncRef.current.maxUpdatedAt, updated.updatedAt);
   };
 
   const handleConfirmarAcreditacion = (pedido: Pedido): void => {
@@ -420,10 +587,10 @@ export function ErpShell({ session, initialPedidos, isLocalDev }: ErpShellProps)
     });
   };
 
-  const handleResolverEnDrawer = (pedido: Pedido, idLinea: string, q0: number, q1: number): void => {
+  const handleResolverEnDrawer = (pedido: Pedido, idLinea: string, cantidades: number[]): void => {
     const lineaObj = pedido.lineas.find((l) => l.idLinea === idLinea);
     if (!lineaObj) return;
-    const resuelta = aplicarResolucionLinea(lineaObj, q0, q1);
+    const resuelta = aplicarResolucionLinea(lineaObj, cantidades, catalogoCompleto);
     if (!resuelta) {
       notify(`La suma debe ser exactamente ${lineaObj.cantidadTotal} u.`, 'red');
       return;
@@ -432,10 +599,69 @@ export function ErpShell({ session, initialPedidos, isLocalDev }: ErpShellProps)
     void handlePatchPedido(
       pedido.id,
       { lineas: nuevasLineas },
-      `Definió talle/color en ${lineaObj.nombreProducto} (${q0} / ${q1})`
+      `Definió talle/color en ${lineaObj.nombreProducto} (${cantidades.join(' / ')})`
     ).then(() => {
       notify(`${lineaObj.nombreProducto} confirmado para depósito.`, 'green');
     });
+  };
+
+  const handleEnviarACuentas = async (params: {
+    pedidoIds: string[];
+    usuarioIds: string[];
+    prioridad: PrioridadAsignacion;
+    notaEnvio: string;
+    forzarSinPago?: boolean;
+  }): Promise<EnviarCuentasResult> => {
+    const res = await enviarPedidosACuentasAction(params);
+    if (res.ok) {
+      await refrescarPedidosDesdeServidor();
+      if (params.pedidoIds.length > 1) {
+        const omitidos = [...res.omitidosTalle, ...res.omitidosSinLineas];
+        if (omitidos.length > 0) {
+          notify(
+            `Enviados ${res.enviados} pedido(s) · Omitidos por faltante: ${omitidos.join(', ')}`,
+            'amber'
+          );
+        } else {
+          notify(`${res.enviados} pedido(s) enviados a la cuenta seleccionada.`, 'green');
+        }
+      }
+    } else if (!res.requiereConfirmacionSinPago && params.pedidoIds.length > 1) {
+      notify(res.error ?? 'No se pudieron enviar los pedidos.', 'red');
+    }
+    return res;
+  };
+
+  const handleRetirarAsignacion = async (pedidoId: string, usuarioId: string): Promise<void> => {
+    const res = await retirarAsignacionAction({ pedidoId, usuarioId });
+    if (!res.ok) {
+      notify(res.error ?? 'No se pudo retirar la asignación.', 'red');
+      return;
+    }
+    await refrescarPedidosDesdeServidor();
+    notify('Asignación retirada.', 'neutral');
+  };
+
+  const handleReportarIncidencia = async (pedidoId: string, mensaje: string): Promise<void> => {
+    const res = await reportarIncidenciaDepositoAction({ pedidoId, mensaje });
+    if (!res.ok || !res.data) {
+      notify(res.error ?? 'No se pudo enviar el aviso.', 'red');
+      return;
+    }
+    const updated = res.data;
+    setPedidos((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
+    notify('Aviso enviado a Administración.', 'amber');
+  };
+
+  const handleResolverIncidencia = async (pedidoId: string): Promise<void> => {
+    const res = await resolverIncidenciaAction(pedidoId);
+    if (!res.ok || !res.data) {
+      notify(res.error ?? 'No se pudo marcar como resuelto.', 'red');
+      return;
+    }
+    const updated = res.data;
+    setPedidos((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
+    notify('Aviso marcado como resuelto.', 'green');
   };
 
   const handleToggleSelectAllVisible = (): void => {
@@ -669,10 +895,6 @@ export function ErpShell({ session, initialPedidos, isLocalDev }: ErpShellProps)
       }
       const nuevo = res.data;
       setPedidos((prev) => [nuevo, ...prev]);
-      lastSyncRef.current = {
-        maxUpdatedAt: Math.max(lastSyncRef.current.maxUpdatedAt, nuevo.updatedAt),
-        activeCount: lastSyncRef.current.activeCount + 1
-      };
       setForm(crearFormInicial());
       setLineasBorrador([]);
       setAdvertenciasExcel([]);
@@ -725,6 +947,10 @@ export function ErpShell({ session, initialPedidos, isLocalDev }: ErpShellProps)
   };
 
   const handleExportarTablero = async (ids?: string[]): Promise<void> => {
+    if (!esAdmin) {
+      notify('Solo Administración puede exportar el tablero general.', 'amber');
+      return;
+    }
     const res = await fetch('/api/export/tablero', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -798,9 +1024,43 @@ export function ErpShell({ session, initialPedidos, isLocalDev }: ErpShellProps)
     setForm(crearFormInicial());
     setConfirmReiniciar(false);
     setVista('pedidos');
-    lastSyncRef.current = { maxUpdatedAt: 0, activeCount: 0 };
     notify('Sistema reiniciado en cero.', 'neutral');
   };
+
+  const filtrosPildora: ReadonlyArray<{ id: FiltroPedidos; label: string; count: number }> = esDeposito
+    ? [
+        { id: 'todos', label: 'Todos', count: conteosFiltro.todos },
+        { id: 'urgentes', label: 'Urgentes', count: conteosFiltro.urgentes },
+        { id: 'por_armar', label: 'Por armar', count: conteosFiltro.por_armar },
+        { id: 'en_armado', label: 'En armado', count: conteosFiltro.en_armado },
+        { id: 'listos', label: 'Listos', count: conteosFiltro.listos },
+        { id: 'despachados', label: 'Despachados', count: conteosFiltro.despachados }
+      ]
+    : [
+        { id: 'todos', label: 'Todos', count: conteosFiltro.todos },
+        { id: 'falta_talle', label: 'Falta talle', count: conteosFiltro.falta_talle },
+        { id: 'cheques', label: 'Cheques', count: conteosFiltro.cheques },
+        { id: 'falta_pago', label: 'Falta pago', count: conteosFiltro.falta_pago },
+        { id: 'listos', label: 'Listos', count: conteosFiltro.listos },
+        ...(esAdmin
+          ? [
+              {
+                id: 'sin_enviar_deposito' as const,
+                label: 'Sin enviar a depósito',
+                count: conteosFiltro.sin_enviar_deposito
+              }
+            ]
+          : []),
+        ...(esAdmin && conteosFiltro.con_aviso_deposito > 0
+          ? [
+              {
+                id: 'con_aviso_deposito' as const,
+                label: 'Con aviso de depósito',
+                count: conteosFiltro.con_aviso_deposito
+              }
+            ]
+          : [])
+      ];
 
   return (
     <div className="min-h-screen bg-[#FAFAFA] text-[#111111] flex flex-col">
@@ -872,34 +1132,48 @@ export function ErpShell({ session, initialPedidos, isLocalDev }: ErpShellProps)
             </span>
           </div>
 
-          <nav className="inline-flex items-center p-1 rounded-full bg-zinc-100 border border-zinc-200/70">
-            <button
-              type="button"
-              onClick={() => setVista('pedidos')}
-              className={`px-4 py-1.5 rounded-full text-xs font-medium transition-all ${
-                vista === 'pedidos'
-                  ? 'bg-white text-[#111111] shadow-[0_1px_2px_rgba(0,0,0,0.06)]'
-                  : 'text-zinc-500 hover:text-[#111111]'
-              }`}
-            >
-              Pedidos
-            </button>
-            <button
-              type="button"
-              onClick={() => setVista('nuevo')}
-              className={`inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs font-medium transition-all ${
-                vista === 'nuevo'
-                  ? 'bg-white text-[#111111] shadow-[0_1px_2px_rgba(0,0,0,0.06)]'
-                  : 'text-zinc-500 hover:text-[#111111]'
-              }`}
-            >
-              <span>Nuevo pedido</span>
-              {hayBorradorSinGuardar && <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />}
-            </button>
-          </nav>
+          {!esDeposito && (
+            <nav className="inline-flex items-center p-1 rounded-full bg-zinc-100 border border-zinc-200/70">
+              <button
+                type="button"
+                onClick={() => setVista('pedidos')}
+                className={`px-4 py-1.5 rounded-full text-xs font-medium transition-all ${
+                  vista === 'pedidos'
+                    ? 'bg-white text-[#111111] shadow-[0_1px_2px_rgba(0,0,0,0.06)]'
+                    : 'text-zinc-500 hover:text-[#111111]'
+                }`}
+              >
+                Pedidos
+              </button>
+              <button
+                type="button"
+                onClick={() => setVista('nuevo')}
+                className={`inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs font-medium transition-all ${
+                  vista === 'nuevo'
+                    ? 'bg-white text-[#111111] shadow-[0_1px_2px_rgba(0,0,0,0.06)]'
+                    : 'text-zinc-500 hover:text-[#111111]'
+                }`}
+              >
+                <span>Nuevo pedido</span>
+                {hayBorradorSinGuardar && <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />}
+              </button>
+            </nav>
+          )}
 
           <div className="flex items-center gap-2">
-            {pedidos.length > 0 && (
+            {!esDeposito && (
+              <button
+                type="button"
+                onClick={() => setModalCatalogoAbierto(true)}
+                className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-white border border-zinc-200 text-zinc-700 hover:bg-zinc-50 transition-colors"
+                title="Productos fuera de planilla"
+              >
+                <BookOpen className="w-3.5 h-3.5" strokeWidth={1.5} />
+                Catálogo
+              </button>
+            )}
+
+            {esAdmin && pedidos.length > 0 && (
               <button
                 type="button"
                 onClick={() => void handleExportarTablero()}
@@ -937,15 +1211,22 @@ export function ErpShell({ session, initialPedidos, isLocalDev }: ErpShellProps)
               </button>
             )}
 
-            <button
-              type="button"
-              onClick={() => setModalEquipoAbierto(true)}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-zinc-50 border border-zinc-200/80 text-zinc-700 hover:bg-zinc-100 transition-colors"
-              title="Equipo y verificación técnica"
-            >
-              <Users className="w-3.5 h-3.5 text-zinc-500" strokeWidth={1.5} />
-              <span className="hidden sm:inline">{session.nombre}</span>
-            </button>
+            {esDeposito ? (
+              <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-zinc-50 border border-zinc-200/80 text-zinc-700">
+                <Users className="w-3.5 h-3.5 text-zinc-500" strokeWidth={1.5} />
+                <span>{session.nombre}</span>
+              </span>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setModalEquipoAbierto(true)}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-zinc-50 border border-zinc-200/80 text-zinc-700 hover:bg-zinc-100 transition-colors"
+                title="Equipo y verificación técnica"
+              >
+                <Users className="w-3.5 h-3.5 text-zinc-500" strokeWidth={1.5} />
+                <span className="hidden sm:inline">{session.nombre}</span>
+              </button>
+            )}
 
             <button
               type="button"
@@ -961,77 +1242,122 @@ export function ErpShell({ session, initialPedidos, isLocalDev }: ErpShellProps)
       </header>
 
       <main className="flex-1 w-full max-w-7xl mx-auto px-4 sm:px-6 py-7">
-        {vista === 'pedidos' && (
+        {(vista === 'pedidos' || esDeposito) && (
           <div className="space-y-6">
-            <section className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-              <div className="bg-white rounded-2xl border border-[#EAEAEA] shadow-[0_1px_2px_rgba(0,0,0,0.03)] px-5 py-4">
-                <div className="text-xs font-medium text-zinc-500">Por armar</div>
-                <div className="mt-1.5 text-2xl font-semibold tracking-tight text-[#111111] tabular-nums">
-                  {resumenFinanciero.porArmar}
+            {esDeposito ? (
+              <section className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                <div className="bg-white rounded-2xl border border-[#EAEAEA] shadow-[0_1px_2px_rgba(0,0,0,0.03)] px-5 py-4">
+                  <div className="text-xs font-medium text-zinc-500">Por armar</div>
+                  <div className="mt-1.5 text-2xl font-semibold tracking-tight text-[#111111] tabular-nums">
+                    {resumenDeposito.porArmar}
+                  </div>
                 </div>
-              </div>
 
-              <div className="bg-white rounded-2xl border border-[#EAEAEA] shadow-[0_1px_2px_rgba(0,0,0,0.03)] px-5 py-4">
-                <div className="text-xs font-medium text-zinc-500">Cobrado en mano</div>
-                <div className="mt-1.5 text-2xl font-semibold tracking-tight text-emerald-700 tabular-nums">
-                  {formatARSCompacto(resumenFinanciero.cobradoEnMano)}
+                <div className="bg-white rounded-2xl border border-[#EAEAEA] shadow-[0_1px_2px_rgba(0,0,0,0.03)] px-5 py-4">
+                  <div className="text-xs font-medium text-zinc-500">Urgentes</div>
+                  <div className="mt-1.5 text-2xl font-semibold tracking-tight text-red-700 tabular-nums">
+                    {resumenDeposito.urgentes}
+                  </div>
                 </div>
-              </div>
 
-              <div className="bg-white rounded-2xl border border-[#EAEAEA] shadow-[0_1px_2px_rgba(0,0,0,0.03)] px-5 py-4">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs font-medium text-zinc-500">En cheques 30d</span>
-                  {resumenFinanciero.chequesPorVencer > 0 && (
-                    <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-red-50 text-red-700 border border-red-200/70 tabular-nums">
-                      {resumenFinanciero.chequesPorVencer} al cobro
-                    </span>
-                  )}
+                <div className="bg-white rounded-2xl border border-[#EAEAEA] shadow-[0_1px_2px_rgba(0,0,0,0.03)] px-5 py-4">
+                  <div className="text-xs font-medium text-zinc-500">En armado</div>
+                  <div className="mt-1.5 text-2xl font-semibold tracking-tight text-[#111111] tabular-nums">
+                    {resumenDeposito.enArmado}
+                  </div>
                 </div>
-                <div className="mt-1.5 text-2xl font-semibold tracking-tight text-amber-700 tabular-nums">
-                  {formatARSCompacto(resumenFinanciero.enCheques)}
-                </div>
-              </div>
 
-              <div className="bg-white rounded-2xl border border-[#EAEAEA] shadow-[0_1px_2px_rgba(0,0,0,0.03)] px-5 py-4">
-                <div className="text-xs font-medium text-zinc-500">Falta pago</div>
-                <div className="mt-1.5 text-2xl font-semibold tracking-tight text-[#111111] tabular-nums">
-                  {formatARSCompacto(resumenFinanciero.faltaPago)}
+                <div className="bg-white rounded-2xl border border-[#EAEAEA] shadow-[0_1px_2px_rgba(0,0,0,0.03)] px-5 py-4">
+                  <div className="text-xs font-medium text-zinc-500">Listos para despachar</div>
+                  <div className="mt-1.5 text-2xl font-semibold tracking-tight text-emerald-700 tabular-nums">
+                    {resumenDeposito.listosDespachar}
+                  </div>
                 </div>
-              </div>
-            </section>
+              </section>
+            ) : (
+              <section className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                <div className="bg-white rounded-2xl border border-[#EAEAEA] shadow-[0_1px_2px_rgba(0,0,0,0.03)] px-5 py-4">
+                  <div className="text-xs font-medium text-zinc-500">Por armar</div>
+                  <div className="mt-1.5 text-2xl font-semibold tracking-tight text-[#111111] tabular-nums">
+                    {resumenFinanciero.porArmar}
+                  </div>
+                </div>
+
+                <div className="bg-white rounded-2xl border border-[#EAEAEA] shadow-[0_1px_2px_rgba(0,0,0,0.03)] px-5 py-4">
+                  <div className="text-xs font-medium text-zinc-500">Cobrado en mano</div>
+                  <div className="mt-1.5 text-2xl font-semibold tracking-tight text-emerald-700 tabular-nums">
+                    {formatARSCompacto(resumenFinanciero.cobradoEnMano)}
+                  </div>
+                </div>
+
+                <div className="bg-white rounded-2xl border border-[#EAEAEA] shadow-[0_1px_2px_rgba(0,0,0,0.03)] px-5 py-4">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-medium text-zinc-500">En cheques 30d</span>
+                    {resumenFinanciero.chequesPorVencer > 0 && (
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-red-50 text-red-700 border border-red-200/70 tabular-nums">
+                        {resumenFinanciero.chequesPorVencer} al cobro
+                      </span>
+                    )}
+                  </div>
+                  <div className="mt-1.5 text-2xl font-semibold tracking-tight text-amber-700 tabular-nums">
+                    {formatARSCompacto(resumenFinanciero.enCheques)}
+                  </div>
+                </div>
+
+                <div className="bg-white rounded-2xl border border-[#EAEAEA] shadow-[0_1px_2px_rgba(0,0,0,0.03)] px-5 py-4">
+                  <div className="text-xs font-medium text-zinc-500">Falta pago</div>
+                  <div className="mt-1.5 text-2xl font-semibold tracking-tight text-[#111111] tabular-nums">
+                    {formatARSCompacto(resumenFinanciero.faltaPago)}
+                  </div>
+                </div>
+              </section>
+            )}
 
             {pedidos.length === 0 ? (
               <section className="bg-white rounded-2xl border border-[#EAEAEA] shadow-[0_1px_2px_rgba(0,0,0,0.03)] px-6 py-16 text-center space-y-4">
                 <div className="mx-auto w-11 h-11 rounded-full bg-zinc-100 flex items-center justify-center text-zinc-500">
                   <Package className="w-5 h-5" strokeWidth={1.5} />
                 </div>
-                <div className="space-y-1">
-                  <h2 className="text-base font-semibold text-[#111111]">Todavía no hay pedidos cargados</h2>
-                  <p className="text-xs text-zinc-500 max-w-md mx-auto">
-                    Subí la planilla oficial <strong className="font-medium text-zinc-700">LISTA N° 006</strong> de un
-                    cliente o importá tu planilla general para empezar a operar.
-                  </p>
-                </div>
-                <div className="flex flex-wrap items-center justify-center gap-2.5 pt-2">
-                  <button
-                    type="button"
-                    onClick={() => setVista('nuevo')}
-                    className="inline-flex items-center gap-1.5 px-5 py-2.5 rounded-full text-xs font-medium bg-zinc-900 hover:bg-zinc-800 text-white transition-colors"
-                  >
-                    <Plus className="w-3.5 h-3.5" strokeWidth={1.75} />
-                    Nuevo pedido
-                  </button>
-                  {esAdmin && (
-                    <button
-                      type="button"
-                      onClick={() => fileInputGeneralRef.current?.click()}
-                      className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-full text-xs font-medium bg-white border border-zinc-200 text-zinc-700 hover:bg-zinc-50 transition-colors"
-                    >
-                      <Upload className="w-3.5 h-3.5" strokeWidth={1.5} />
-                      Importar planilla previa
-                    </button>
-                  )}
-                </div>
+                {esDeposito ? (
+                  <div className="space-y-1">
+                    <h2 className="text-base font-semibold text-[#111111]">
+                      No hay pedidos asignados a Depósito todavía
+                    </h2>
+                    <p className="text-xs text-zinc-500 max-w-md mx-auto">
+                      Cuando Administración envíe un pedido listo a tu cuenta, aparecerá acá automáticamente.
+                    </p>
+                  </div>
+                ) : (
+                  <>
+                    <div className="space-y-1">
+                      <h2 className="text-base font-semibold text-[#111111]">Todavía no hay pedidos cargados</h2>
+                      <p className="text-xs text-zinc-500 max-w-md mx-auto">
+                        Subí la planilla oficial <strong className="font-medium text-zinc-700">LISTA N° 006</strong> de un
+                        cliente o importá tu planilla general para empezar a operar.
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap items-center justify-center gap-2.5 pt-2">
+                      <button
+                        type="button"
+                        onClick={() => setVista('nuevo')}
+                        className="inline-flex items-center gap-1.5 px-5 py-2.5 rounded-full text-xs font-medium bg-zinc-900 hover:bg-zinc-800 text-white transition-colors"
+                      >
+                        <Plus className="w-3.5 h-3.5" strokeWidth={1.75} />
+                        Nuevo pedido
+                      </button>
+                      {esAdmin && (
+                        <button
+                          type="button"
+                          onClick={() => fileInputGeneralRef.current?.click()}
+                          className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-full text-xs font-medium bg-white border border-zinc-200 text-zinc-700 hover:bg-zinc-50 transition-colors"
+                        >
+                          <Upload className="w-3.5 h-3.5" strokeWidth={1.5} />
+                          Importar planilla previa
+                        </button>
+                      )}
+                    </div>
+                  </>
+                )}
               </section>
             ) : (
               <section className="space-y-4">
@@ -1046,7 +1372,7 @@ export function ErpShell({ session, initialPedidos, isLocalDev }: ErpShellProps)
                       type="text"
                       value={busqueda}
                       onChange={(e) => setBusqueda(e.target.value)}
-                      placeholder="Buscar cliente o vendedor..."
+                      placeholder="Buscar cliente, número o artículo..."
                       className="w-full pl-9 pr-10 py-2 text-sm bg-white border border-zinc-200/90 rounded-full focus:outline-none focus:border-zinc-400 transition-colors placeholder:text-zinc-400"
                     />
                     {busqueda ? (
@@ -1066,15 +1392,7 @@ export function ErpShell({ session, initialPedidos, isLocalDev }: ErpShellProps)
                   </div>
 
                   <div className="flex flex-wrap items-center gap-1.5">
-                    {(
-                      [
-                        { id: 'todos', label: 'Todos', count: conteosFiltro.todos },
-                        { id: 'falta_talle', label: 'Falta talle', count: conteosFiltro.falta_talle },
-                        { id: 'cheques', label: 'Cheques', count: conteosFiltro.cheques },
-                        { id: 'falta_pago', label: 'Falta pago', count: conteosFiltro.falta_pago },
-                        { id: 'listos', label: 'Listos', count: conteosFiltro.listos }
-                      ] as const
-                    ).map((item) => {
+                    {filtrosPildora.map((item) => {
                       const activo = filtro === item.id;
                       return (
                         <button
@@ -1095,14 +1413,16 @@ export function ErpShell({ session, initialPedidos, isLocalDev }: ErpShellProps)
                       );
                     })}
 
-                    <button
-                      type="button"
-                      onClick={() => setVista('nuevo')}
-                      className="ml-1 inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs font-medium bg-zinc-900 hover:bg-zinc-800 text-white transition-colors"
-                    >
-                      <Plus className="w-3.5 h-3.5" strokeWidth={1.75} />
-                      Nuevo pedido
-                    </button>
+                    {!esDeposito && (
+                      <button
+                        type="button"
+                        onClick={() => setVista('nuevo')}
+                        className="ml-1 inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs font-medium bg-zinc-900 hover:bg-zinc-800 text-white transition-colors"
+                      >
+                        <Plus className="w-3.5 h-3.5" strokeWidth={1.75} />
+                        Nuevo pedido
+                      </button>
+                    )}
                   </div>
                 </div>
 
@@ -1112,9 +1432,10 @@ export function ErpShell({ session, initialPedidos, isLocalDev }: ErpShellProps)
                   todosVisiblesSeleccionados={todosVisiblesSeleccionados}
                   seleccionParcialVisible={seleccionParcialVisible}
                   esAdmin={esAdmin}
+                  esDeposito={esDeposito}
                   onToggleSelectAll={handleToggleSelectAllVisible}
                   onToggleSelectRow={handleToggleSelectRow}
-                  onOpenDrawer={setDrawerPedidoId}
+                  onOpenDrawer={handleOpenDrawer}
                   onConfirmarAcreditacion={handleConfirmarAcreditacion}
                   onExportarHojaDeposito={(p) => void handleExportarHojaDeposito(p)}
                 />
@@ -1123,10 +1444,11 @@ export function ErpShell({ session, initialPedidos, isLocalDev }: ErpShellProps)
           </div>
         )}
 
-        {vista === 'nuevo' && (
+        {!esDeposito && vista === 'nuevo' && (
           <NuevoPedidoView
             esAdmin={esAdmin}
             proximoNumeroPedido={proximoNumeroPedido}
+            catalogoCompleto={catalogoCompleto}
             form={form}
             setForm={setForm}
             lineasBorrador={lineasBorrador}
@@ -1142,6 +1464,7 @@ export function ErpShell({ session, initialPedidos, isLocalDev }: ErpShellProps)
             onVolver={() => setVista('pedidos')}
             onCopyText={handleCopyText}
             onNotify={notify}
+            onProductoCustomCreado={(rec) => setProductosCustom((prev) => [rec, ...prev])}
             onGuardar={handleGuardarNuevoPedido}
           />
         )}
@@ -1155,8 +1478,11 @@ export function ErpShell({ session, initialPedidos, isLocalDev }: ErpShellProps)
         <FloatingBatchBar
           selectedCount={selectedIds.size}
           totalSeleccionado={totalSeleccionado}
+          totalUnidadesSeleccionadas={totalUnidadesSeleccionadas}
           pedidosSeleccionados={pedidosSeleccionados}
           esAdmin={esAdmin}
+          esDeposito={esDeposito}
+          cuentasAsignables={cuentasAsignables}
           batchPanel={batchPanel}
           setBatchPanel={setBatchPanel}
           onLimpiarSeleccion={limpiarSeleccion}
@@ -1164,6 +1490,7 @@ export function ErpShell({ session, initialPedidos, isLocalDev }: ErpShellProps)
           onBatchEnvio={handleBatchEnvio}
           onBatchPago={handleBatchPago}
           onBatchVendedor={handleBatchVendedor}
+          onEnviarLoteACuentas={handleEnviarACuentas}
           onExportTableroSeleccionados={() => {
             setBatchPanel(null);
             void handleExportarTablero(pedidosSeleccionados.map((p) => p.id));
@@ -1177,6 +1504,9 @@ export function ErpShell({ session, initialPedidos, isLocalDev }: ErpShellProps)
         <PedidoDrawer
           pedido={pedidoDrawer}
           esAdmin={esAdmin}
+          esDeposito={esDeposito}
+          catalogoCompleto={catalogoCompleto}
+          cuentasAsignables={cuentasAsignables}
           copiadoId={copiadoId}
           onClose={() => setDrawerPedidoId(null)}
           onPatch={handlePatchPedido}
@@ -1185,13 +1515,31 @@ export function ErpShell({ session, initialPedidos, isLocalDev }: ErpShellProps)
           onExportarHojaDeposito={(p) => void handleExportarHojaDeposito(p)}
           onDuplicarComoNuevo={handleDuplicarComoNuevoPedido}
           onEliminarIndividual={handleEliminarIndividual}
+          onEnviarACuentas={handleEnviarACuentas}
+          onRetirarAsignacion={handleRetirarAsignacion}
+          onReportarIncidencia={handleReportarIncidencia}
+          onResolverIncidencia={handleResolverIncidencia}
           onCopyText={handleCopyText}
           onNotify={notify}
         />
       )}
 
-      {modalEquipoAbierto && (
-        <EquipoModal session={session} onClose={() => setModalEquipoAbierto(false)} onNotify={notify} />
+      {modalEquipoAbierto && !esDeposito && (
+        <EquipoModal
+          session={session}
+          onClose={() => setModalEquipoAbierto(false)}
+          onNotify={notify}
+          onEquipoActualizado={refrescarCuentasDesdeServidor}
+        />
+      )}
+
+      {modalCatalogoAbierto && !esDeposito && (
+        <CatalogoModal
+          esAdmin={esAdmin}
+          onClose={() => setModalCatalogoAbierto(false)}
+          onCatalogoActualizado={refrescarCatalogoDesdeServidor}
+          onNotify={notify}
+        />
       )}
     </div>
   );

@@ -1,17 +1,25 @@
 import { CATALOGO_BY_GRUPO } from './catalogo-mibi';
-import type { LineaPedido, Pedido } from './types';
+import type { LineaPedido, Pedido, ProductoCatalogo } from './types';
 
 export const generarMensajeWhatsApp = (
   cliente: string,
   numeroPedido: string,
-  lineas: ReadonlyArray<LineaPedido>
+  lineas: ReadonlyArray<LineaPedido>,
+  catalogoExtra: ReadonlyArray<ProductoCatalogo> = []
 ): string => {
   const pendientes = lineas.filter((l) => l.requiereRevision || l.estado !== 'OK');
   if (pendientes.length === 0) return '';
+
+  const extraByGrupo = new Map<string, ProductoCatalogo>();
+  for (const p of catalogoExtra) {
+    extraByGrupo.set(p.idGrupo, p);
+  }
+
   const lista = pendientes
     .map((l) => {
-      const prod = CATALOGO_BY_GRUPO.get(l.idGrupo);
-      const opciones = prod ? prod.variantes.map((v) => `${v.etiqueta} (${v.codigo})`).join(' / ') : '';
+      const prod = extraByGrupo.get(l.idGrupo) ?? CATALOGO_BY_GRUPO.get(l.idGrupo);
+      const variantes = prod ? prod.variantes : l.desglose;
+      const opciones = variantes.map((v) => `${v.etiqueta} (${v.codigo})`).join(' / ');
       return `• ${l.nombreProducto} — ${l.cantidadTotal} u. (elegir entre: ${opciones})`;
     })
     .join('\n');

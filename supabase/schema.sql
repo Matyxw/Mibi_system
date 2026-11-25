@@ -10,13 +10,34 @@ CREATE TABLE IF NOT EXISTS public.usuarios (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   username TEXT UNIQUE NOT NULL,
   nombre TEXT NOT NULL,
-  rol TEXT NOT NULL CHECK (rol IN ('ADMIN', 'VENTAS_DEPOSITO')),
+  rol TEXT NOT NULL CHECK (rol IN ('ADMIN', 'VENTAS', 'DEPOSITO', 'VENTAS_DEPOSITO')),
   password_hash TEXT NOT NULL,
   activo BOOLEAN NOT NULL DEFAULT true,
   token_version INT NOT NULL DEFAULT 1,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Actualización idempotente de restricción de roles en bases ya existentes
+DO $$
+DECLARE
+  cname TEXT;
+BEGIN
+  FOR cname IN
+    SELECT con.conname
+    FROM pg_constraint con
+    JOIN pg_class rel ON rel.oid = con.conrelid
+    JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+    WHERE nsp.nspname = 'public'
+      AND rel.relname = 'usuarios'
+      AND con.contype = 'c'
+      AND pg_get_constraintdef(con.oid) LIKE '%rol%'
+  LOOP
+    EXECUTE format('ALTER TABLE public.usuarios DROP CONSTRAINT IF EXISTS %I', cname);
+  END LOOP;
+  ALTER TABLE public.usuarios
+    ADD CONSTRAINT usuarios_rol_check CHECK (rol IN ('ADMIN', 'VENTAS', 'DEPOSITO', 'VENTAS_DEPOSITO'));
+END $$;
 
 -- 2. SECUENCIA ATÓMICA DE NÚMERO DE PEDIDO
 CREATE SEQUENCE IF NOT EXISTS public.pedidos_numero_seq START 1;
@@ -55,11 +76,20 @@ CREATE TABLE IF NOT EXISTS public.pedidos (
   nro_seguimiento TEXT NOT NULL DEFAULT '',
   observaciones TEXT NOT NULL DEFAULT '',
   detalle_manual_importado TEXT,
+  created_by UUID NULL REFERENCES public.usuarios(id) ON DELETE SET NULL,
+  incidencia_deposito TEXT NOT NULL DEFAULT '',
+  incidencia_at TIMESTAMPTZ NULL,
+  incidencia_por TEXT NOT NULL DEFAULT '',
   version INT NOT NULL DEFAULT 1,
   deleted_at TIMESTAMPTZ NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE public.pedidos ADD COLUMN IF NOT EXISTS created_by UUID NULL REFERENCES public.usuarios(id) ON DELETE SET NULL;
+ALTER TABLE public.pedidos ADD COLUMN IF NOT EXISTS incidencia_deposito TEXT NOT NULL DEFAULT '';
+ALTER TABLE public.pedidos ADD COLUMN IF NOT EXISTS incidencia_at TIMESTAMPTZ NULL;
+ALTER TABLE public.pedidos ADD COLUMN IF NOT EXISTS incidencia_por TEXT NOT NULL DEFAULT '';
 
 -- 4. LÍNEAS DESGLOSADAS DE PEDIDO
 CREATE TABLE IF NOT EXISTS public.pedido_lineas (
@@ -87,6 +117,36 @@ CREATE TABLE IF NOT EXISTS public.pedido_historial (
   rol TEXT NOT NULL,
   accion TEXT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- 5B. CATÁLOGO EXTENSIBLE (PRODUCTOS FUERA DE PLANILLA)
+CREATE TABLE IF NOT EXISTS public.productos_custom (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  id_grupo TEXT UNIQUE NOT NULL,
+  nombre TEXT NOT NULL,
+  rubro TEXT NOT NULL,
+  precio_neto NUMERIC(14,2) NOT NULL CHECK (precio_neto >= 0),
+  variantes_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  activo BOOLEAN NOT NULL DEFAULT true,
+  created_by UUID NULL REFERENCES public.usuarios(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- 5C. DERIVACIÓN Y LIBERACIÓN DE PEDIDOS POR CUENTA (N:M)
+CREATE TABLE IF NOT EXISTS public.pedido_asignaciones (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  pedido_id UUID NOT NULL REFERENCES public.pedidos(id) ON DELETE CASCADE,
+  usuario_id UUID NOT NULL REFERENCES public.usuarios(id) ON DELETE CASCADE,
+  enviado_por UUID NULL REFERENCES public.usuarios(id) ON DELETE SET NULL,
+  enviado_por_nombre TEXT NOT NULL DEFAULT 'Administración',
+  nota_envio TEXT NOT NULL DEFAULT '',
+  prioridad TEXT NOT NULL DEFAULT 'NORMAL' CHECK (prioridad IN ('NORMAL', 'URGENTE')),
+  visto_at TIMESTAMPTZ NULL,
+  requiere_relectura BOOLEAN NOT NULL DEFAULT false,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (pedido_id, usuario_id)
 );
 
 -- 6. FUNCIÓN DE SINCRONIZACIÓN DE SECUENCIA TRAS IMPORTACIONES
@@ -118,6 +178,10 @@ CREATE INDEX IF NOT EXISTS idx_pedidos_fecha_cheque ON public.pedidos (fecha_acr
 CREATE INDEX IF NOT EXISTS idx_pedidos_numero ON public.pedidos (numero_pedido);
 CREATE INDEX IF NOT EXISTS idx_pedido_lineas_pedido_id ON public.pedido_lineas (pedido_id);
 CREATE INDEX IF NOT EXISTS idx_pedido_historial_pedido_id ON public.pedido_historial (pedido_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_pedidos_created_by ON public.pedidos (created_by);
+CREATE INDEX IF NOT EXISTS idx_productos_custom_activo ON public.productos_custom (activo, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_pedido_asignaciones_usuario_id ON public.pedido_asignaciones (usuario_id);
+CREATE INDEX IF NOT EXISTS idx_pedido_asignaciones_pedido_id ON public.pedido_asignaciones (pedido_id);
 
 -- 8. LOCKDOWN TOTAL DE LA API PÚBLICA DE SUPABASE (MODO BÚNKER)
 ALTER TABLE public.usuarios ENABLE ROW LEVEL SECURITY;
@@ -128,6 +192,10 @@ ALTER TABLE public.pedido_lineas ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.pedido_lineas FORCE ROW LEVEL SECURITY;
 ALTER TABLE public.pedido_historial ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.pedido_historial FORCE ROW LEVEL SECURITY;
+ALTER TABLE public.productos_custom ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.productos_custom FORCE ROW LEVEL SECURITY;
+ALTER TABLE public.pedido_asignaciones ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.pedido_asignaciones FORCE ROW LEVEL SECURITY;
 
 REVOKE ALL ON ALL TABLES IN SCHEMA public FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM PUBLIC, anon, authenticated;

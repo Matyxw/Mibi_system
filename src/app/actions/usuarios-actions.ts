@@ -4,7 +4,9 @@ import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 import { AuthError, requireAdmin } from '@/lib/dal/auth';
 import {
+  cambiarRolUsuarioDal,
   crearUsuarioDal,
+  listarCuentasAsignablesDal,
   listarUsuariosDal,
   rotarPasswordUsuarioDal,
   toggleActivoUsuarioDal
@@ -19,7 +21,7 @@ const CrearUsuarioSchema = z.object({
     .max(40)
     .regex(/^[a-zA-Z0-9._-]+$/, 'Usá solo letras, números, punto o guion.'),
   nombre: z.string().trim().min(2).max(80),
-  rol: z.enum(['ADMIN', 'VENTAS_DEPOSITO']),
+  rol: z.enum(['ADMIN', 'VENTAS', 'DEPOSITO', 'VENTAS_DEPOSITO']),
   password: z.string().min(4).max(128)
 });
 
@@ -31,6 +33,11 @@ const RotarPasswordSchema = z.object({
 const ToggleActivoSchema = z.object({
   userId: z.string().min(1),
   activo: z.boolean()
+});
+
+const CambiarRolSchema = z.object({
+  userId: z.string().min(1),
+  rol: z.enum(['ADMIN', 'VENTAS', 'DEPOSITO', 'VENTAS_DEPOSITO'])
 });
 
 export interface UsuarioActionResponse<T> {
@@ -103,5 +110,32 @@ export async function toggleActivoUsuarioAction(
     return { ok: true, data: { ok: true } };
   } catch (err) {
     return { ok: false, error: toErr(err, 'No se pudo actualizar el estado del usuario.') };
+  }
+}
+
+export async function cambiarRolUsuarioAction(
+  raw: z.infer<typeof CambiarRolSchema>
+): Promise<UsuarioActionResponse<{ ok: true }>> {
+  try {
+    await requireAdmin();
+    const parsed = CambiarRolSchema.safeParse(raw);
+    if (!parsed.success) {
+      return { ok: false, error: 'Datos de rol inválidos.' };
+    }
+    await cambiarRolUsuarioDal(parsed.data.userId, parsed.data.rol);
+    revalidatePath('/');
+    return { ok: true, data: { ok: true } };
+  } catch (err) {
+    return { ok: false, error: toErr(err, 'No se pudo cambiar el rol del usuario.') };
+  }
+}
+
+export async function listarCuentasAsignablesAction(): Promise<UsuarioActionResponse<UsuarioEquipo[]>> {
+  try {
+    await requireAdmin();
+    const list = await listarCuentasAsignablesDal();
+    return { ok: true, data: list };
+  } catch (err) {
+    return { ok: false, error: toErr(err, 'No se pudieron obtener las cuentas.') };
   }
 }

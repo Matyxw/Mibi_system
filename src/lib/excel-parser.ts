@@ -1,5 +1,5 @@
 import * as XLSX from 'xlsx';
-import { CATALOGO_BY_CODIGO, CATALOGO_BY_GRUPO } from './catalogo-mibi';
+import { CATALOGO_BY_CODIGO, CATALOGO_BY_GRUPO, CATALOGO_MIBI } from './catalogo-mibi';
 import { addDaysISO, formatNowDateTime, getTodayISO, recalcularPedido, round2 } from './finanzas';
 import type {
   AdvertenciaExcel,
@@ -76,7 +76,106 @@ export const resolverLinea = (
     };
   }
 
-  // Caso 2: Producto con 2 variantes (talle o color) -> cero suposiciones
+  // Caso 2: Producto con 3 o más variantes (soporte N variantes)
+  if (producto.variantes.length >= 3) {
+    const fallbackN = (motivo: string): LineaPedido => ({
+      idLinea,
+      idGrupo: producto.idGrupo,
+      nombreProducto: producto.nombre,
+      rubro: producto.rubro,
+      precioUnitarioNeto: producto.precioNeto,
+      cantidadTotal,
+      notaCliente: notaLimpia,
+      estado: 'REQUIERE_REVISION',
+      requiereRevision: true,
+      motivoRevision: motivo,
+      desglose: producto.variantes.map((v) => ({ codigo: v.codigo, etiqueta: v.etiqueta, cantidad: 0 }))
+    });
+
+    if (!notaNorm) {
+      return fallbackN('Sin detalle de talle o color');
+    }
+    if (/\b(surtid[oa]s?|variad[oa]s?|eleccion|mezclad[oa]s?|cualquiera)\b/.test(notaNorm)) {
+      return fallbackN('Nota ambigua ("surtido" o similar)');
+    }
+
+    const empiezaConNumN = /^\s*\d+/.test(notaNorm);
+    const extraerCantN = (variante: VarianteCatalogo): number | null => {
+      const aliasList = variante.aliases.length > 0 ? variante.aliases : [variante.codigo, variante.etiqueta];
+      const aliasPattern = aliasList.map(escapeRegex).join('|');
+      const reColon = new RegExp(`\\b(?:${aliasPattern})\\b\\s*(?::|=|-)\\s*(\\d+)`, 'i');
+      const reAntes = new RegExp(`(\\d+)\\s*(?:u\\.?|unid\\.?|de)?\\s*\\b(?:${aliasPattern})\\b`, 'i');
+      const reDespues = new RegExp(`\\b(?:${aliasPattern})\\b\\s*(?::|=|-)?\\s*(\\d+)`, 'i');
+
+      const mColon = notaNorm.match(reColon);
+      if (mColon && mColon[1]) return parseInt(mColon[1], 10);
+
+      if (empiezaConNumN) {
+        const mAntes = notaNorm.match(reAntes);
+        if (mAntes && mAntes[1]) return parseInt(mAntes[1], 10);
+        const mDespues = notaNorm.match(reDespues);
+        if (mDespues && mDespues[1]) return parseInt(mDespues[1], 10);
+      } else {
+        const mDespues = notaNorm.match(reDespues);
+        if (mDespues && mDespues[1]) return parseInt(mDespues[1], 10);
+        const mAntes = notaNorm.match(reAntes);
+        if (mAntes && mAntes[1]) return parseInt(mAntes[1], 10);
+      }
+      return null;
+    };
+
+    const cantidadesN = producto.variantes.map((v) => extraerCantN(v));
+    if (cantidadesN.some((c) => c !== null)) {
+      const sum = cantidadesN.reduce<number>((acc, c) => acc + (c ?? 0), 0);
+      if (sum === cantidadTotal) {
+        return {
+          idLinea,
+          idGrupo: producto.idGrupo,
+          nombreProducto: producto.nombre,
+          rubro: producto.rubro,
+          precioUnitarioNeto: producto.precioNeto,
+          cantidadTotal,
+          notaCliente: notaLimpia,
+          estado: 'OK',
+          requiereRevision: false,
+          desglose: producto.variantes.map((v, idx) => ({
+            codigo: v.codigo,
+            etiqueta: v.etiqueta,
+            cantidad: cantidadesN[idx] ?? 0
+          }))
+        };
+      }
+      return fallbackN(`Las cantidades (${cantidadesN.map((c) => c ?? 0).join(' + ')}) no suman ${cantidadTotal}`);
+    }
+
+    const mencionaVariantes = producto.variantes.map((v) =>
+      v.aliases.some((al) => new RegExp(`\\b${escapeRegex(al)}\\b`, 'i').test(notaNorm))
+    );
+    const mencionesCount = mencionaVariantes.filter(Boolean).length;
+    if (mencionesCount === 1 && !/\d/.test(notaNorm)) {
+      const idxUnico = mencionaVariantes.findIndex(Boolean);
+      return {
+        idLinea,
+        idGrupo: producto.idGrupo,
+        nombreProducto: producto.nombre,
+        rubro: producto.rubro,
+        precioUnitarioNeto: producto.precioNeto,
+        cantidadTotal,
+        notaCliente: notaLimpia,
+        estado: 'OK',
+        requiereRevision: false,
+        desglose: producto.variantes.map((v, idx) => ({
+          codigo: v.codigo,
+          etiqueta: v.etiqueta,
+          cantidad: idx === idxUnico ? cantidadTotal : 0
+        }))
+      };
+    }
+
+    return fallbackN(`No se pudo determinar el desglose exacto ("${notaLimpia}")`);
+  }
+
+  // Caso 3: Producto con 2 variantes (talle o color) -> cero suposiciones
   const v0 = producto.variantes[0]!;
   const v1 = producto.variantes[1]!;
 
@@ -298,25 +397,37 @@ export const resolverLinea = (
 
 export const aplicarResolucionLinea = (
   linea: LineaPedido,
-  q0: number,
-  q1: number
+  q0OrCantidades: number | ReadonlyArray<number>,
+  q1OrCatalogo?: number | ReadonlyArray<ProductoCatalogo>
 ): LineaPedido | null => {
-  const prod = CATALOGO_BY_GRUPO.get(linea.idGrupo);
-  if (!prod || prod.variantes.length < 2) return null;
-  if (q0 < 0 || q1 < 0 || !Number.isInteger(q0) || !Number.isInteger(q1)) return null;
-  if (q0 + q1 !== linea.cantidadTotal) return null;
+  const catalogoExtra = Array.isArray(q1OrCatalogo) ? q1OrCatalogo : [];
+  const prod =
+    catalogoExtra.find((p) => p.idGrupo === linea.idGrupo) ?? CATALOGO_BY_GRUPO.get(linea.idGrupo);
+  const variantesBase: ReadonlyArray<{ codigo: string; etiqueta: string }> = prod
+    ? prod.variantes
+    : linea.desglose;
+  if (variantesBase.length < 2) return null;
 
-  const v0 = prod.variantes[0]!;
-  const v1 = prod.variantes[1]!;
+  const cantidades: number[] = Array.isArray(q0OrCantidades)
+    ? [...q0OrCantidades]
+    : [q0OrCantidades, typeof q1OrCatalogo === 'number' ? q1OrCatalogo : 0];
+
+  if (cantidades.length !== variantesBase.length) return null;
+  if (cantidades.some((q) => !Number.isInteger(q) || q < 0)) return null;
+
+  const suma = cantidades.reduce((acc, q) => acc + q, 0);
+  if (suma !== linea.cantidadTotal) return null;
+
   return {
     ...linea,
     estado: 'OK',
     requiereRevision: false,
     motivoRevision: undefined,
-    desglose: [
-      { codigo: v0.codigo, etiqueta: v0.etiqueta, cantidad: q0 },
-      { codigo: v1.codigo, etiqueta: v1.etiqueta, cantidad: q1 }
-    ]
+    desglose: variantesBase.map((v, idx) => ({
+      codigo: v.codigo,
+      etiqueta: v.etiqueta,
+      cantidad: cantidades[idx] ?? 0
+    }))
   };
 };
 
@@ -477,8 +588,15 @@ export const parsearCantidadEstricta = (
 
 export const parsearExcelLista006 = (
   buffer: ArrayBuffer,
-  fileName: string
+  fileName: string,
+  catalogoExtra: ReadonlyArray<ProductoCatalogo> = CATALOGO_MIBI
 ): ResultadoParseoLista006 => {
+  const catalogoPorCodigo = new Map<string, ProductoCatalogo>(CATALOGO_BY_CODIGO);
+  for (const prod of catalogoExtra) {
+    for (const v of prod.variantes) {
+      catalogoPorCodigo.set(v.codigo.trim().toUpperCase(), prod);
+    }
+  }
   let wb: SheetJSWorkBook;
   try {
     wb = leerWorkbookSeguro(buffer, fileName);
@@ -571,12 +689,26 @@ export const parsearExcelLista006 = (
         colCodeB < row.length && row[colCodeB] !== null && row[colCodeB] !== undefined
           ? String(row[colCodeB])
           : '';
-      const matchA = limpiarTextoInvisible(rawA).match(/\b(\d{4})\b/);
-      const matchB = limpiarTextoInvisible(rawB).match(/\b(\d{4})\b/);
+      const cleanA = limpiarTextoInvisible(rawA).toUpperCase();
+      const cleanB = limpiarTextoInvisible(rawB).toUpperCase();
+      const extractCode = (txt: string): string | null => {
+        if (!txt) return null;
+        if (catalogoPorCodigo.has(txt)) return txt;
+        const mNum = txt.match(/\b(\d{4})\b/);
+        if (mNum && mNum[1]) return mNum[1];
+        const mExt = txt.match(/\b([A-Z0-9]{2,12}-[A-Z0-9]{1,12})\b/);
+        if (mExt && mExt[1]) return mExt[1];
+        for (const token of txt.split(/[\s\/,|]+/)) {
+          if (token && catalogoPorCodigo.has(token)) return token;
+        }
+        return null;
+      };
+      const codeA = extractCode(cleanA);
+      const codeB = extractCode(cleanB);
 
       const codigosEnFila: string[] = [];
-      if (matchA && matchA[1]) codigosEnFila.push(matchA[1]);
-      if (matchB && matchB[1] && matchB[1] !== matchA?.[1]) codigosEnFila.push(matchB[1]);
+      if (codeA) codigosEnFila.push(codeA);
+      if (codeB && codeB !== codeA) codigosEnFila.push(codeB);
 
       if (codigosEnFila.length === 0) continue;
 
@@ -608,7 +740,7 @@ export const parsearExcelLista006 = (
 
       let producto: ProductoCatalogo | undefined;
       for (const cod of codigosEnFila) {
-        const encontrado = CATALOGO_BY_CODIGO.get(cod);
+        const encontrado = catalogoPorCodigo.get(cod.toUpperCase()) ?? CATALOGO_BY_CODIGO.get(cod);
         if (encontrado) {
           producto = encontrado;
           break;

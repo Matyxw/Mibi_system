@@ -9,7 +9,7 @@ import {
   formatShortDate,
   getDiasParaAcreditacionCheque
 } from '@/lib/finanzas';
-import type { Pedido } from '@/lib/types';
+import { isDepositoRole, type Pedido } from '@/lib/types';
 import { StatusPill } from './status-pill';
 
 interface PedidosTableProps {
@@ -18,6 +18,7 @@ interface PedidosTableProps {
   todosVisiblesSeleccionados: boolean;
   seleccionParcialVisible: boolean;
   esAdmin: boolean;
+  esDeposito: boolean;
   onToggleSelectAll: () => void;
   onToggleSelectRow: (id: string, shiftKey: boolean) => void;
   onOpenDrawer: (id: string) => void;
@@ -31,6 +32,7 @@ export function PedidosTable({
   todosVisiblesSeleccionados,
   seleccionParcialVisible,
   esAdmin,
+  esDeposito,
   onToggleSelectAll,
   onToggleSelectRow,
   onOpenDrawer,
@@ -63,10 +65,20 @@ export function PedidosTable({
                 />
               </th>
               <th className="py-3.5 pl-2 pr-3">N.º y Fecha</th>
-              <th className="py-3.5 px-3">Cliente</th>
-              <th className="py-3.5 px-3 text-right">Total</th>
-              <th className="py-3.5 px-3">Pago</th>
-              <th className="py-3.5 px-3">Armado</th>
+              <th className="py-3.5 px-3">{esDeposito ? 'Cliente y Nota' : 'Cliente'}</th>
+              {esDeposito ? (
+                <>
+                  <th className="py-3.5 px-3">Artículos / Unidades</th>
+                  <th className="py-3.5 px-3">Despacho previsto</th>
+                  <th className="py-3.5 px-3">Armado y Envío</th>
+                </>
+              ) : (
+                <>
+                  <th className="py-3.5 px-3 text-right">Total</th>
+                  <th className="py-3.5 px-3">Pago</th>
+                  <th className="py-3.5 px-3">Armado</th>
+                </>
+              )}
               <th className="py-3.5 pl-3 pr-6 text-right">Acción</th>
             </tr>
           </thead>
@@ -85,6 +97,15 @@ export function PedidosTable({
                 const chequeAlCobro = esChequePendiente && diasCheque !== null && diasCheque <= 0;
                 const atrasado = esDespachoAtrasado(p);
                 const seleccionado = selectedIds.has(p.id);
+                const totalUnidades = p.lineas.reduce((acc, l) => acc + l.cantidadTotal, 0);
+
+                const asigsDeposito = (p.asignaciones ?? []).filter((a) => isDepositoRole(a.usuarioRol));
+                const esUrgente = asigsDeposito.some((a) => a.prioridad === 'URGENTE');
+                const requiereRelectura = asigsDeposito.some((a) => a.requiereRelectura);
+                const vistoDeposito = asigsDeposito.some((a) => a.vistoAt !== null);
+                const notaDeposito = Array.from(
+                  new Set(asigsDeposito.map((a) => a.notaEnvio.trim()).filter(Boolean))
+                ).join(' · ');
 
                 return (
                   <tr
@@ -124,53 +145,76 @@ export function PedidosTable({
                     </td>
 
                     <td className="py-3.5 px-3 min-w-[200px]">
-                      <div className="font-medium text-[#111111]">{p.cliente}</div>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="font-medium text-[#111111]">{p.cliente}</span>
+                        {esDeposito && esUrgente && <StatusPill tone="red">Urgente</StatusPill>}
+                        {esDeposito && requiereRelectura && <StatusPill tone="amber">Actualizado</StatusPill>}
+                      </div>
                       <div className="text-xs text-zinc-400 mt-0.5">
-                        {p.vendedor}
-                        {p.detalleResumen && p.detalleResumen !== '—' ? ` · ${p.detalleResumen}` : ''}
+                        {esDeposito
+                          ? notaDeposito || p.vendedor
+                          : `${p.vendedor}${p.detalleResumen && p.detalleResumen !== '—' ? ` · ${p.detalleResumen}` : ''}`}
                       </div>
                     </td>
 
-                    <td className="py-3.5 px-3 text-right whitespace-nowrap tabular-nums">
-                      <div className="font-semibold text-[#111111]">{formatARS(p.totalFacturado)}</div>
-                      <div className="text-xs text-zinc-400 mt-0.5">
-                        {esChequePendiente
-                          ? chequeAlCobro
-                            ? diasCheque === 0
-                              ? 'Vence hoy'
-                              : `Vencido hace ${Math.abs(diasCheque ?? 0)}d`
-                            : `Faltan ${diasCheque}d · ${formatShortDate(p.fechaAcreditacionCheque)}`
-                          : p.saldoPendiente > 0.01
-                            ? `Resta ${formatARSCompacto(p.saldoPendiente)}`
-                            : 'Cobrado'}
-                      </div>
-                    </td>
+                    {esDeposito ? (
+                      <>
+                        <td className="py-3.5 px-3 whitespace-nowrap tabular-nums">
+                          <div className="font-semibold text-[#111111]">{totalUnidades} u.</div>
+                          <div className="text-xs text-zinc-400 mt-0.5">{p.lineas.length} artículos</div>
+                        </td>
 
-                    <td className="py-3.5 px-3 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
-                      <div className="flex flex-col items-start gap-1.5">
-                        {p.estadoPago === 'Pagado' && <StatusPill tone="green">Pagado</StatusPill>}
-                        {p.estadoPago === 'Pendiente' && (
-                          <StatusPill tone={chequeAlCobro ? 'red' : 'amber'}>
+                        <td className="py-3.5 px-3 whitespace-nowrap tabular-nums">
+                          <div className="text-xs font-medium text-[#111111]">
+                            {p.despachoPrevisto ? formatShortDate(p.despachoPrevisto) : '—'}
+                          </div>
+                          {atrasado && <div className="text-[11px] text-amber-700 mt-0.5">Atrasado</div>}
+                        </td>
+                      </>
+                    ) : (
+                      <>
+                        <td className="py-3.5 px-3 text-right whitespace-nowrap tabular-nums">
+                          <div className="font-semibold text-[#111111]">{formatARS(p.totalFacturado)}</div>
+                          <div className="text-xs text-zinc-400 mt-0.5">
                             {esChequePendiente
                               ? chequeAlCobro
-                                ? 'Cheque al cobro'
-                                : 'Pendiente · Cheque'
-                              : 'Pendiente'}
-                          </StatusPill>
-                        )}
-                        {p.estadoPago === 'Falta pago' && <StatusPill tone="red">Falta pago</StatusPill>}
+                                ? diasCheque === 0
+                                  ? 'Vence hoy'
+                                  : `Vencido hace ${Math.abs(diasCheque ?? 0)}d`
+                                : `Faltan ${diasCheque}d · ${formatShortDate(p.fechaAcreditacionCheque)}`
+                              : p.saldoPendiente > 0.01
+                                ? `Resta ${formatARSCompacto(p.saldoPendiente)}`
+                                : 'Cobrado'}
+                          </div>
+                        </td>
 
-                        {esChequePendiente && esAdmin && (
-                          <button
-                            type="button"
-                            onClick={() => onConfirmarAcreditacion(p)}
-                            className="text-[11px] font-medium text-emerald-700 hover:text-emerald-800 underline underline-offset-2"
-                          >
-                            Confirmar plata acreditada
-                          </button>
-                        )}
-                      </div>
-                    </td>
+                        <td className="py-3.5 px-3 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                          <div className="flex flex-col items-start gap-1.5">
+                            {p.estadoPago === 'Pagado' && <StatusPill tone="green">Pagado</StatusPill>}
+                            {p.estadoPago === 'Pendiente' && (
+                              <StatusPill tone={chequeAlCobro ? 'red' : 'amber'}>
+                                {esChequePendiente
+                                  ? chequeAlCobro
+                                    ? 'Cheque al cobro'
+                                    : 'Pendiente · Cheque'
+                                  : 'Pendiente'}
+                              </StatusPill>
+                            )}
+                            {p.estadoPago === 'Falta pago' && <StatusPill tone="red">Falta pago</StatusPill>}
+
+                            {esChequePendiente && esAdmin && (
+                              <button
+                                type="button"
+                                onClick={() => onConfirmarAcreditacion(p)}
+                                className="text-[11px] font-medium text-emerald-700 hover:text-emerald-800 underline underline-offset-2"
+                              >
+                                Confirmar plata acreditada
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </>
+                    )}
 
                     <td className="py-3.5 px-3 whitespace-nowrap">
                       <div className="flex flex-col items-start gap-0.5">
@@ -188,9 +232,31 @@ export function PedidosTable({
                             {p.estadoEnvio}
                             {p.transporte ? ` · ${p.transporte}` : ''}
                           </span>
-                        ) : atrasado ? (
+                        ) : atrasado && !esDeposito ? (
                           <span className="text-[11px] text-amber-700 pl-0.5">Despacho atrasado</span>
                         ) : null}
+
+                        {!esDeposito && (
+                          <span className="text-[11px] pl-0.5">
+                            {p.incidenciaDeposito ? (
+                              <span className="text-amber-700 font-medium">Aviso de depósito</span>
+                            ) : asigsDeposito.length > 0 ? (
+                              <span className={esUrgente ? 'text-red-600 font-medium' : 'text-zinc-400'}>
+                                {esUrgente
+                                  ? 'Urgente · Depósito'
+                                  : requiereRelectura
+                                    ? 'En Depósito · Actualizado'
+                                    : vistoDeposito
+                                      ? 'En Depósito · Visto'
+                                      : 'En Depósito · Sin leer'}
+                              </span>
+                            ) : (
+                              <span className="text-zinc-400">
+                                {esAdmin ? 'Solo en Administración' : 'En seguimiento'}
+                              </span>
+                            )}
+                          </span>
+                        )}
                       </div>
                     </td>
 
@@ -199,7 +265,7 @@ export function PedidosTable({
                       onClick={(e) => e.stopPropagation()}
                     >
                       <div className="inline-flex items-center gap-1.5">
-                        {faltaDefinir ? (
+                        {faltaDefinir && !esDeposito ? (
                           <button
                             type="button"
                             onClick={() => onOpenDrawer(p.id)}

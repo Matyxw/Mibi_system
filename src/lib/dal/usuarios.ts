@@ -1,7 +1,7 @@
 import 'server-only';
 
 import { randomUUID } from 'node:crypto';
-import { asc, eq } from 'drizzle-orm';
+import { asc, eq, ne } from 'drizzle-orm';
 import { getDb, isLocalFallbackMode, readLocalStore, writeLocalStore } from '@/lib/db';
 import { usuarios } from '@/lib/db/schema';
 import { hashPassword, verifyPassword } from '@/lib/auth/password';
@@ -244,4 +244,89 @@ export const toggleActivoUsuarioDal = async (
       updatedAt: new Date()
     })
     .where(eq(usuarios.id, targetUserId));
+};
+
+export const cambiarRolUsuarioDal = async (
+  targetUserId: string,
+  nuevoRol: RolUsuario
+): Promise<void> => {
+  const admin = await requireAdmin();
+  if (admin.userId === targetUserId && nuevoRol !== 'ADMIN') {
+    throw new Error('No podés quitarte el rol de Administración a vos mismo.');
+  }
+
+  if (isLocalFallbackMode()) {
+    const store = readLocalStore();
+    const u = store.usuarios.find((x) => x.id === targetUserId);
+    if (!u) throw new Error('Usuario no encontrado.');
+    u.rol = nuevoRol;
+    u.tokenVersion += 1;
+    u.updatedAt = Date.now();
+    writeLocalStore(store);
+    return;
+  }
+
+  const db = getDb();
+  const current = await db
+    .select({ tokenVersion: usuarios.tokenVersion })
+    .from(usuarios)
+    .where(eq(usuarios.id, targetUserId))
+    .limit(1);
+  const curr = current[0];
+  if (!curr) throw new Error('Usuario no encontrado.');
+
+  await db
+    .update(usuarios)
+    .set({
+      rol: nuevoRol,
+      tokenVersion: curr.tokenVersion + 1,
+      updatedAt: new Date()
+    })
+    .where(eq(usuarios.id, targetUserId));
+};
+
+export const listarCuentasAsignablesDal = async (): Promise<UsuarioEquipo[]> => {
+  await requireAdmin();
+
+  if (isLocalFallbackMode()) {
+    const store = readLocalStore();
+    return store.usuarios
+      .filter((u) => u.activo && u.rol !== 'ADMIN')
+      .map((u) => ({
+        id: u.id,
+        username: u.username,
+        nombre: u.nombre,
+        rol: u.rol,
+        activo: u.activo,
+        tokenVersion: u.tokenVersion,
+        createdAt: u.createdAt
+      }));
+  }
+
+  const db = getDb();
+  const rows = await db
+    .select({
+      id: usuarios.id,
+      username: usuarios.username,
+      nombre: usuarios.nombre,
+      rol: usuarios.rol,
+      activo: usuarios.activo,
+      tokenVersion: usuarios.tokenVersion,
+      createdAt: usuarios.createdAt
+    })
+    .from(usuarios)
+    .where(ne(usuarios.rol, 'ADMIN'))
+    .orderBy(asc(usuarios.rol), asc(usuarios.nombre));
+
+  return rows
+    .filter((r) => r.activo)
+    .map((r) => ({
+      id: r.id,
+      username: r.username,
+      nombre: r.nombre,
+      rol: r.rol,
+      activo: r.activo,
+      tokenVersion: r.tokenVersion,
+      createdAt: r.createdAt.getTime()
+    }));
 };

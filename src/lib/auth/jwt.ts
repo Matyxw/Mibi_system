@@ -45,7 +45,12 @@ export const verifySessionToken = async (token: string): Promise<SessionUser | n
     const nombre = typeof payload['nombre'] === 'string' ? payload['nombre'] : '';
     const rolRaw = payload['rol'];
     const rol: RolUsuario | null =
-      rolRaw === 'ADMIN' || rolRaw === 'VENTAS_DEPOSITO' ? rolRaw : null;
+      rolRaw === 'ADMIN' ||
+      rolRaw === 'VENTAS' ||
+      rolRaw === 'DEPOSITO' ||
+      rolRaw === 'VENTAS_DEPOSITO'
+        ? rolRaw
+        : null;
     const tokenVersion = typeof payload['tokenVersion'] === 'number' ? payload['tokenVersion'] : 0;
 
     if (!userId || !username || !nombre || !rol || tokenVersion < 1) {

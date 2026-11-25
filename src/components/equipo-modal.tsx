@@ -3,6 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import { CheckCircle2, KeyRound, ShieldCheck, UserPlus, X } from 'lucide-react';
 import {
+  cambiarRolUsuarioAction,
   crearUsuarioAction,
   listarUsuariosAction,
   rotarPasswordAction,
@@ -16,15 +17,21 @@ interface EquipoModalProps {
   session: SessionUser;
   onClose: () => void;
   onNotify: (texto: string, tone?: ToneStatus) => void;
+  onEquipoActualizado?: () => Promise<void>;
 }
 
-export function EquipoModal({ session, onClose, onNotify }: EquipoModalProps): React.JSX.Element {
+export function EquipoModal({
+  session,
+  onClose,
+  onNotify,
+  onEquipoActualizado
+}: EquipoModalProps): React.JSX.Element {
   const esAdmin = session.rol === 'ADMIN';
   const [usuarios, setUsuarios] = useState<UsuarioEquipo[]>([]);
   const [cargando, setCargando] = useState<boolean>(esAdmin);
   const [nuevoUsername, setNuevoUsername] = useState<string>('');
   const [nuevoNombre, setNuevoNombre] = useState<string>('');
-  const [nuevoRol, setNuevoRol] = useState<RolUsuario>('VENTAS_DEPOSITO');
+  const [nuevoRol, setNuevoRol] = useState<RolUsuario>('VENTAS');
   const [nuevaPassword, setNuevaPassword] = useState<string>('');
   const [guardando, setGuardando] = useState<boolean>(false);
   const [rotandoId, setRotandoId] = useState<string | null>(null);
@@ -64,6 +71,18 @@ export function EquipoModal({ session, onClose, onNotify }: EquipoModalProps): R
     setNuevaPassword('');
     onNotify(`Usuario ${res.data?.nombre} creado.`, 'green');
     await cargarUsuarios();
+    if (onEquipoActualizado) await onEquipoActualizado();
+  };
+
+  const handleCambiarRol = async (u: UsuarioEquipo, rol: RolUsuario): Promise<void> => {
+    const res = await cambiarRolUsuarioAction({ userId: u.id, rol });
+    if (!res.ok) {
+      onNotify(res.error ?? 'No se pudo cambiar el rol.', 'red');
+      return;
+    }
+    onNotify(`Rol de ${u.nombre} actualizado a ${rolUsuarioToLabel(rol)}.`, 'green');
+    await cargarUsuarios();
+    if (onEquipoActualizado) await onEquipoActualizado();
   };
 
   const handleRotarPassword = async (userId: string): Promise<void> => {
@@ -92,6 +111,7 @@ export function EquipoModal({ session, onClose, onNotify }: EquipoModalProps): R
     }
     onNotify(u.activo ? `${u.nombre} deshabilitado.` : `${u.nombre} habilitado.`, 'neutral');
     await cargarUsuarios();
+    if (onEquipoActualizado) await onEquipoActualizado();
   };
 
   return (
@@ -147,6 +167,21 @@ export function EquipoModal({ session, onClose, onNotify }: EquipoModalProps): R
                         <StatusPill tone={u.activo ? 'green' : 'red'}>
                           {u.activo ? 'Activo' : 'Inactivo'}
                         </StatusPill>
+                        {u.id !== session.userId && (
+                          <select
+                            value={u.rol}
+                            onChange={(e) => void handleCambiarRol(u, e.target.value as RolUsuario)}
+                            className="px-2 py-1 rounded-full border border-zinc-200 bg-white text-[11px] text-zinc-700"
+                            aria-label={`Rol de ${u.nombre}`}
+                          >
+                            <option value="VENTAS">Ventas</option>
+                            <option value="DEPOSITO">Depósito</option>
+                            <option value="ADMIN">Administración</option>
+                            {u.rol === 'VENTAS_DEPOSITO' && (
+                              <option value="VENTAS_DEPOSITO">Ventas / Depósito (legado)</option>
+                            )}
+                          </select>
+                        )}
                         <button
                           type="button"
                           onClick={() => {
@@ -219,7 +254,8 @@ export function EquipoModal({ session, onClose, onNotify }: EquipoModalProps): R
                   onChange={(e) => setNuevoRol(e.target.value as RolUsuario)}
                   className="px-3 py-2 bg-white border border-zinc-200 rounded-xl"
                 >
-                  <option value="VENTAS_DEPOSITO">Ventas / Depósito</option>
+                  <option value="VENTAS">Ventas</option>
+                  <option value="DEPOSITO">Depósito</option>
                   <option value="ADMIN">Administración</option>
                 </select>
                 <input
@@ -248,7 +284,7 @@ export function EquipoModal({ session, onClose, onNotify }: EquipoModalProps): R
             className="w-full inline-flex items-center justify-center gap-1.5 py-2 rounded-full text-xs font-medium bg-[#FAFAFA] border border-zinc-200 text-zinc-700 hover:bg-zinc-100 transition-colors"
           >
             <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" strokeWidth={1.5} />
-            Ejecutar verificación técnica del motor (28 pruebas)
+            Ejecutar verificación técnica del motor (30 pruebas)
           </button>
 
           {resultadosVerificacion && (

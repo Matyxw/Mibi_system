@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
-import { AuthError, requireSession } from '@/lib/dal/auth';
+import { AuthError, requireAdmin } from '@/lib/dal/auth';
 import { listarPedidosDal, obtenerPedidosPorIdsDal } from '@/lib/dal/pedidos';
 import { generarBufferTableroMaestro } from '@/lib/excel-exporter';
 import { calcularResumenFinanciero } from '@/lib/finanzas';
@@ -16,7 +16,7 @@ const BodySchema = z.object({
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
   try {
-    await requireSession();
+    await requireAdmin();
     const json = (await req.json().catch(() => ({}))) as unknown;
     const parsed = BodySchema.safeParse(json);
     if (!parsed.success) {

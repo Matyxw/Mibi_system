@@ -5,7 +5,12 @@ import path from 'node:path';
 import postgres, { type Sql } from 'postgres';
 import { drizzle, type PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import * as schema from './schema';
-import type { Pedido, RolUsuario } from '@/lib/types';
+import type {
+  Pedido,
+  PedidoAsignacion,
+  ProductoCustomRecord,
+  RolUsuario
+} from '@/lib/types';
 import { hashPassword } from '@/lib/auth/password';
 
 export interface LocalUsuarioRecord {
@@ -22,8 +27,11 @@ export interface LocalUsuarioRecord {
 
 export interface LocalDevStore {
   nextNumeroSeq: number;
+  nextCustomCodeSeq: number;
   usuarios: LocalUsuarioRecord[];
   pedidos: Pedido[];
+  productosCustom: ProductoCustomRecord[];
+  pedidoAsignaciones: PedidoAsignacion[];
 }
 
 export type DrizzleDb = PostgresJsDatabase<typeof schema>;
@@ -140,7 +148,7 @@ const buildDefaultLocalUsers = (): LocalUsuarioRecord[] => {
       id: '00000000-0000-4000-8000-000000000006',
       username: 'deposito',
       nombre: 'Depósito',
-      rol: 'VENTAS_DEPOSITO',
+      rol: 'DEPOSITO',
       passwordHash: ventasHash,
       activo: true,
       tokenVersion: 1,
@@ -157,8 +165,11 @@ export const readLocalStore = (): LocalDevStore => {
   if (!fs.existsSync(LOCAL_DATA_FILE)) {
     const initial: LocalDevStore = {
       nextNumeroSeq: 0,
+      nextCustomCodeSeq: 0,
       usuarios: buildDefaultLocalUsers(),
-      pedidos: []
+      pedidos: [],
+      productosCustom: [],
+      pedidoAsignaciones: []
     };
     fs.writeFileSync(LOCAL_DATA_FILE, JSON.stringify(initial, null, 2), 'utf-8');
     return initial;
@@ -171,13 +182,26 @@ export const readLocalStore = (): LocalDevStore => {
       ? parsed.usuarios
       : buildDefaultLocalUsers();
     const pedidos = Array.isArray(parsed.pedidos) ? parsed.pedidos : [];
+    const productosCustom = Array.isArray(parsed.productosCustom) ? parsed.productosCustom : [];
+    const pedidoAsignaciones = Array.isArray(parsed.pedidoAsignaciones) ? parsed.pedidoAsignaciones : [];
     const nextNumeroSeq = typeof parsed.nextNumeroSeq === 'number' ? parsed.nextNumeroSeq : 0;
-    return { nextNumeroSeq, usuarios, pedidos };
+    const nextCustomCodeSeq = typeof parsed.nextCustomCodeSeq === 'number' ? parsed.nextCustomCodeSeq : 0;
+    return {
+      nextNumeroSeq,
+      nextCustomCodeSeq,
+      usuarios,
+      pedidos,
+      productosCustom,
+      pedidoAsignaciones
+    };
   } catch {
     const fallback: LocalDevStore = {
       nextNumeroSeq: 0,
+      nextCustomCodeSeq: 0,
       usuarios: buildDefaultLocalUsers(),
-      pedidos: []
+      pedidos: [],
+      productosCustom: [],
+      pedidoAsignaciones: []
     };
     fs.writeFileSync(LOCAL_DATA_FILE, JSON.stringify(fallback, null, 2), 'utf-8');
     return fallback;

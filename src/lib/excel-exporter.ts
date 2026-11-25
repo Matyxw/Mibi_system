@@ -78,46 +78,32 @@ export const generarBufferHojaDeposito = (pedido: Pedido): BufferHojaDepositoRes
   for (const l of pedido.lineas) {
     for (const d of l.desglose.filter((x) => x.cantidad > 0)) {
       totalUnidades += d.cantidad;
-      const subtotalLinea = round2(l.precioUnitarioNeto * d.cantidad);
-      filasArticulos.push([
-        d.codigo,
-        l.nombreProducto,
-        d.etiqueta,
-        d.cantidad,
-        l.precioUnitarioNeto,
-        subtotalLinea
-      ]);
+      filasArticulos.push([d.codigo, l.nombreProducto, d.etiqueta, d.cantidad]);
     }
   }
+
+  const asignacionesDeposito = (pedido.asignaciones ?? []).filter((a) => a.usuarioRol === 'DEPOSITO');
+  const esUrgente = asignacionesDeposito.some((a) => a.prioridad === 'URGENTE');
+  const notasDeposito = Array.from(
+    new Set(asignacionesDeposito.map((a) => a.notaEnvio.trim()).filter(Boolean))
+  ).join(' · ');
 
   const aoa: CellPrimitive[][] = [
     [`MIBI® — HOJA PARA DEPÓSITO · PEDIDO #${pedido.numeroPedido}`],
     [MIBI_BRAND.pieOficial],
-    ['Cliente', pedido.cliente, 'Vendedor', pedido.vendedor, 'Fecha pedido', pedido.fechaPedido],
-    [
-      'Transporte',
-      pedido.transporte || 'A definir',
-      'Despacho previsto',
-      pedido.despachoPrevisto,
-      'WhatsApp',
-      pedido.whatsapp || '—'
-    ],
+    ['Cliente', pedido.cliente, 'Vendedor', pedido.vendedor],
+    ['Fecha pedido', pedido.fechaPedido, 'Despacho previsto', pedido.despachoPrevisto || '—'],
+    ['Transporte', pedido.transporte || 'A definir', 'Prioridad', esUrgente ? 'URGENTE' : 'Normal'],
+    ...(notasDeposito ? [['Nota para depósito', notasDeposito]] : []),
     [],
-    ['Código', 'Artículo', 'Talle / Color', 'Cantidad', 'Precio Neto Unit.', 'Subtotal Neto'],
+    ['Código', 'Producto', 'Talle / Color', 'Cantidad pedida'],
     ...filasArticulos,
     [],
-    ['', '', 'TOTAL UNIDADES', totalUnidades, 'Subtotal Neto', pedido.subtotalNeto],
-    ['', '', '', '', `Descuento (${pedido.descuentoPorc}%)`, pedido.montoDescuento],
-    ['', '', '', '', 'Base Imponible (Total B)', pedido.baseImponible],
-    ['', '', '', '', 'IVA 21%', pedido.iva21],
-    ['', '', '', '', 'TOTAL FACTURADO', pedido.totalFacturado],
-    ['', '', '', '', 'Cobrado en mano', pedido.montoAbonado],
-    ['', '', '', '', 'Saldo pendiente', pedido.saldoPendiente]
+    ['', '', 'TOTAL UNIDADES', totalUnidades]
   ];
 
   const ws = XLSX.utils.aoa_to_sheet(aoa);
-  ws['!cols'] = [{ wch: 12 }, { wch: 42 }, { wch: 22 }, { wch: 12 }, { wch: 20 }, { wch: 18 }];
-  aplicarFormatoMoneda(ws, [4, 5]);
+  ws['!cols'] = [{ wch: 14 }, { wch: 44 }, { wch: 24 }, { wch: 16 }];
 
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, `Pedido_${pedido.numeroPedido}`);

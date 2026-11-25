@@ -207,7 +207,11 @@ export const recalcularPedido = (base: PedidoBase): Pedido => {
     deudaSinRespaldo: fromCents(deudaSinRespaldoCents),
     estadoPago,
     faltantesVariante,
-    detalleResumen: construirDetalleResumen(base.lineas, base.detalleManualImportado)
+    detalleResumen: construirDetalleResumen(base.lineas, base.detalleManualImportado),
+    incidenciaDeposito: base.incidenciaDeposito ?? '',
+    incidenciaAt: base.incidenciaAt ?? null,
+    incidenciaPor: base.incidenciaPor ?? '',
+    asignaciones: Array.isArray(base.asignaciones) ? base.asignaciones : []
   };
 };
 

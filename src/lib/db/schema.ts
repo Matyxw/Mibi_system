@@ -10,9 +10,15 @@ import {
   pgTable,
   text,
   timestamp,
+  uniqueIndex,
   uuid
 } from 'drizzle-orm/pg-core';
-import type { DesgloseVariante } from '@/lib/types';
+import type {
+  DesgloseVariante,
+  PrioridadAsignacion,
+  RolUsuario,
+  VarianteCatalogo
+} from '@/lib/types';
 
 export const pedidosNumeroSeq = pgSequence('pedidos_numero_seq', { startWith: 1 });
 
@@ -20,7 +26,7 @@ export const usuarios = pgTable('usuarios', {
   id: uuid('id').defaultRandom().primaryKey(),
   username: text('username').notNull().unique(),
   nombre: text('nombre').notNull(),
-  rol: text('rol').$type<'ADMIN' | 'VENTAS_DEPOSITO'>().notNull(),
+  rol: text('rol').$type<RolUsuario>().notNull(),
   passwordHash: text('password_hash').notNull(),
   activo: boolean('activo').notNull().default(true),
   tokenVersion: integer('token_version').notNull().default(1),
@@ -64,6 +70,10 @@ export const pedidos = pgTable('pedidos', {
   nroSeguimiento: text('nro_seguimiento').notNull().default(''),
   observaciones: text('observaciones').notNull().default(''),
   detalleManualImportado: text('detalle_manual_importado'),
+  createdBy: uuid('created_by').references(() => usuarios.id, { onDelete: 'set null' }),
+  incidenciaDeposito: text('incidencia_deposito').notNull().default(''),
+  incidenciaAt: timestamp('incidencia_at', { withTimezone: true }),
+  incidenciaPor: text('incidencia_por').notNull().default(''),
   version: integer('version').notNull().default(1),
   deletedAt: timestamp('deleted_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -99,3 +109,38 @@ export const pedidoHistorial = pgTable('pedido_historial', {
   accion: text('accion').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow()
 });
+
+export const productosCustom = pgTable('productos_custom', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  idGrupo: text('id_grupo').notNull().unique(),
+  nombre: text('nombre').notNull(),
+  rubro: text('rubro').notNull(),
+  precioNeto: numeric('precio_neto', { precision: 14, scale: 2 }).notNull(),
+  variantesJson: jsonb('variantes_json').$type<VarianteCatalogo[]>().notNull().default([]),
+  activo: boolean('activo').notNull().default(true),
+  createdBy: uuid('created_by').references(() => usuarios.id, { onDelete: 'set null' }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
+});
+
+export const pedidoAsignaciones = pgTable(
+  'pedido_asignaciones',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    pedidoId: uuid('pedido_id')
+      .notNull()
+      .references(() => pedidos.id, { onDelete: 'cascade' }),
+    usuarioId: uuid('usuario_id')
+      .notNull()
+      .references(() => usuarios.id, { onDelete: 'cascade' }),
+    enviadoPor: uuid('enviado_por').references(() => usuarios.id, { onDelete: 'set null' }),
+    enviadoPorNombre: text('enviado_por_nombre').notNull().default('Administración'),
+    notaEnvio: text('nota_envio').notNull().default(''),
+    prioridad: text('prioridad').$type<PrioridadAsignacion>().notNull().default('NORMAL'),
+    vistoAt: timestamp('visto_at', { withTimezone: true }),
+    requiereRelectura: boolean('requiere_relectura').notNull().default(false),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
+  },
+  (t) => [uniqueIndex('pedido_asignaciones_pedido_id_usuario_id_key').on(t.pedidoId, t.usuarioId)]
+);

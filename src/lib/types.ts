@@ -5,14 +5,33 @@ export type EstadoEnvio = 'Pendiente' | 'Despachado' | 'Entregado';
 export type EstadoLinea = 'OK' | 'REQUIERE_REVISION';
 export type AlertaCheque = 'VENCIDO' | 'VENCE_HOY' | 'EN_PLAZO' | null;
 export type VistaActiva = 'pedidos' | 'nuevo';
-export type FiltroPedidos = 'todos' | 'falta_talle' | 'cheques' | 'falta_pago' | 'listos';
+export type FiltroPedidos =
+  | 'todos'
+  | 'falta_talle'
+  | 'cheques'
+  | 'falta_pago'
+  | 'listos'
+  | 'sin_enviar_deposito'
+  | 'con_aviso_deposito'
+  | 'urgentes'
+  | 'por_armar'
+  | 'en_armado'
+  | 'despachados';
 export type ToneStatus = 'green' | 'amber' | 'red' | 'neutral' | 'ink';
-export type BatchPanelActivo = 'estado' | 'pago' | 'exportar' | 'eliminar' | null;
-export type RolUsuario = 'ADMIN' | 'VENTAS_DEPOSITO';
-export type RolEquipo = 'Administración' | 'Ventas / Depósito';
+export type BatchPanelActivo = 'estado' | 'pago' | 'enviar' | 'exportar' | 'eliminar' | null;
+export type RolUsuario = 'ADMIN' | 'VENTAS' | 'DEPOSITO' | 'VENTAS_DEPOSITO';
+export type RolEquipo = 'Administración' | 'Ventas' | 'Depósito' | 'Ventas / Depósito';
+export type PrioridadAsignacion = 'NORMAL' | 'URGENTE';
 
-export const rolUsuarioToLabel = (rol: RolUsuario): RolEquipo =>
-  rol === 'ADMIN' ? 'Administración' : 'Ventas / Depósito';
+export const rolUsuarioToLabel = (rol: RolUsuario): RolEquipo => {
+  if (rol === 'ADMIN') return 'Administración';
+  if (rol === 'VENTAS') return 'Ventas';
+  if (rol === 'DEPOSITO') return 'Depósito';
+  return 'Ventas / Depósito';
+};
+
+export const isDepositoRole = (rol: RolUsuario): boolean => rol === 'DEPOSITO';
+export const isVentasRole = (rol: RolUsuario): boolean => rol === 'VENTAS' || rol === 'VENTAS_DEPOSITO';
 
 export type CellPrimitive = string | number | boolean | null;
 
@@ -52,6 +71,38 @@ export interface ProductoCatalogo {
   rubro: string;
   precioNeto: number;
   variantes: ReadonlyArray<VarianteCatalogo>;
+  esCustom?: boolean;
+  activo?: boolean;
+  customId?: string;
+}
+
+export interface ProductoCustomRecord {
+  id: string;
+  idGrupo: string;
+  nombre: string;
+  rubro: string;
+  precioNeto: number;
+  variantes: VarianteCatalogo[];
+  activo: boolean;
+  createdBy: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface PedidoAsignacion {
+  id: string;
+  pedidoId: string;
+  usuarioId: string;
+  usuarioNombre: string;
+  usuarioRol: RolUsuario;
+  enviadoPor: string | null;
+  enviadoPorNombre: string;
+  notaEnvio: string;
+  prioridad: PrioridadAsignacion;
+  vistoAt: number | null;
+  requiereRelectura: boolean;
+  createdAt: number;
+  updatedAt: number;
 }
 
 export interface DesgloseVariante {
@@ -110,6 +161,11 @@ export interface PedidoBase {
   createdAt: number;
   updatedAt: number;
   historial: HistorialEvento[];
+  createdBy?: string | null;
+  incidenciaDeposito?: string;
+  incidenciaAt?: number | null;
+  incidenciaPor?: string;
+  asignaciones?: PedidoAsignacion[];
   detalleManualImportado?: string;
   totalFacturadoOverride?: number;
 }
@@ -125,6 +181,10 @@ export interface Pedido extends PedidoBase {
   estadoPago: EstadoPago;
   faltantesVariante: number;
   detalleResumen: string;
+  incidenciaDeposito: string;
+  incidenciaAt: number | null;
+  incidenciaPor: string;
+  asignaciones: PedidoAsignacion[];
 }
 
 export interface ResumenFinanciero {

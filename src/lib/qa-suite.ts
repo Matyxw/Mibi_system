@@ -1,5 +1,6 @@
 import { CATALOGO_BY_CODIGO } from './catalogo-mibi';
 import {
+  aplicarResolucionLinea,
   crearLineasEjemploLista006,
   limpiarTextoInvisible,
   parsearCantidadEstricta,
@@ -15,8 +16,8 @@ import {
   recalcularPedido,
   round2
 } from './finanzas';
-import { generarMensajeDespachoWhatsApp } from './whatsapp';
-import type { PedidoBase, ResultadoQA } from './types';
+import { generarMensajeDespachoWhatsApp, generarMensajeWhatsApp } from './whatsapp';
+import type { PedidoBase, ProductoCatalogo, ResultadoQA } from './types';
 
 export const ejecutarSuiteQA = (): ResultadoQA[] => {
   const resultados: ResultadoQA[] = [];
@@ -216,6 +217,45 @@ export const ejecutarSuiteQA = (): ResultadoQA[] => {
 
   const montoFecha = parsearMontoArgentino('10/11');
   check('No confunde fecha "10/11" con monto', montoFecha === 0, `Resultado: ${montoFecha}`);
+
+  const pilusoCat: ProductoCatalogo = {
+    idGrupo: 'CUSTOM_PILUSO_SHARK',
+    nombre: 'Piluso Shark',
+    rubro: 'PILUSOS',
+    precioNeto: 8500,
+    esCustom: true,
+    variantes: [
+      { codigo: 'PIL-S', etiqueta: 'T1 (1-3 años)', aliases: ['PIL-S', 'T1'] },
+      { codigo: 'PIL-M', etiqueta: 'T2 (3-6 años)', aliases: ['PIL-M', 'T2'] },
+      { codigo: 'PIL-L', etiqueta: 'T3 (6-9 años)', aliases: ['PIL-L', 'T3'] }
+    ]
+  };
+  const lPilPend = resolverLinea(pilusoCat, 6, 'surtido');
+  const lPilRes = aplicarResolucionLinea(lPilPend, [2, 3, 1], [pilusoCat]);
+  const msgPil = generarMensajeWhatsApp('Juguetería Sol', '0088', [lPilPend], [pilusoCat]);
+  check(
+    'Producto custom N variantes (3 talles): resolución y WhatsApp completo',
+    lPilPend.requiereRevision === true &&
+      lPilRes !== null &&
+      lPilRes.requiereRevision === false &&
+      lPilRes.desglose.length === 3 &&
+      msgPil.includes('PIL-S') &&
+      msgPil.includes('PIL-L'),
+    lPilRes ? `${lPilRes.desglose.map((d) => `${d.codigo}:${d.cantidad}`).join(', ')}` : 'Error'
+  );
+
+  const pedCustomCalc = recalcularPedido({
+    ...pedBase,
+    lineas: lPilRes ? [lPilRes] : [],
+    descuentoPorc: 10
+  });
+  const pilBase = round2(round2(6 * 8500) * 0.9);
+  const pilTot = round2(pilBase * 1.21);
+  check(
+    'Finanzas centavos enteros en producto fuera de planilla',
+    pedCustomCalc.baseImponible === pilBase && pedCustomCalc.totalFacturado === pilTot,
+    formatARS(pedCustomCalc.totalFacturado)
+  );
 
   return resultados;
 };

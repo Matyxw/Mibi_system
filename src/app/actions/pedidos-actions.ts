@@ -6,13 +6,19 @@ import { AuthError, requireAdmin, requireSession } from '@/lib/dal/auth';
 import {
   batchUpdatePedidosDal,
   crearPedidoDal,
+  enviarPedidosACuentasDal,
   importarPedidosHistoricosDal,
   listarPedidosDal,
+  marcarPedidoVistoDal,
   patchPedidoDal,
   reiniciarSistemaDal,
+  reportarIncidenciaDepositoDal,
+  resolverIncidenciaDepositoDal,
   restorePedidosDal,
+  retirarAsignacionDal,
   softDeletePedidosDal,
   type BatchActionInput,
+  type EnviarCuentasResult,
   type PatchPedidoInput
 } from '@/lib/dal/pedidos';
 import { importarPlanillaGeneral } from '@/lib/excel-parser';
@@ -96,6 +102,24 @@ const BatchActionSchema = z.object({
   ])
 });
 
+const EnviarCuentasSchema = z.object({
+  pedidoIds: z.array(z.string().min(1)).min(1),
+  usuarioIds: z.array(z.string().min(1)).min(1),
+  prioridad: z.enum(['NORMAL', 'URGENTE']),
+  notaEnvio: z.string().max(300),
+  forzarSinPago: z.boolean().optional()
+});
+
+const RetirarAsignacionSchema = z.object({
+  pedidoId: z.string().min(1),
+  usuarioId: z.string().min(1)
+});
+
+const IncidenciaSchema = z.object({
+  pedidoId: z.string().min(1),
+  mensaje: z.string().trim().min(2, 'Escribí el detalle del faltante o problema.').max(400)
+});
+
 const IdsSchema = z.object({
   ids: z.array(z.string().min(1)).min(1)
 });
@@ -154,6 +178,96 @@ export async function patchPedidoAction(
     return { ok: true, data: updated };
   } catch (err) {
     return { ok: false, error: toActionError(err, 'No se pudo actualizar el pedido.') };
+  }
+}
+
+export async function enviarPedidosACuentasAction(
+  raw: z.infer<typeof EnviarCuentasSchema>
+): Promise<EnviarCuentasResult> {
+  try {
+    await requireAdmin();
+    const parsed = EnviarCuentasSchema.safeParse(raw);
+    if (!parsed.success) {
+      return {
+        ok: false,
+        enviados: 0,
+        omitidosTalle: [],
+        omitidosSinLineas: [],
+        error: 'Seleccioná pedidos y cuentas válidas.'
+      };
+    }
+    const res = await enviarPedidosACuentasDal(parsed.data);
+    if (res.ok) revalidatePath('/');
+    return res;
+  } catch (err) {
+    return {
+      ok: false,
+      enviados: 0,
+      omitidosTalle: [],
+      omitidosSinLineas: [],
+      error: toActionError(err, 'No se pudo enviar a las cuentas seleccionadas.')
+    };
+  }
+}
+
+export async function retirarAsignacionAction(
+  raw: z.infer<typeof RetirarAsignacionSchema>
+): Promise<ActionResponse<{ ok: true }>> {
+  try {
+    await requireAdmin();
+    const parsed = RetirarAsignacionSchema.safeParse(raw);
+    if (!parsed.success) {
+      return { ok: false, error: 'Datos inválidos.' };
+    }
+    await retirarAsignacionDal(parsed.data.pedidoId, parsed.data.usuarioId);
+    revalidatePath('/');
+    return { ok: true, data: { ok: true } };
+  } catch (err) {
+    return { ok: false, error: toActionError(err, 'No se pudo retirar la asignación.') };
+  }
+}
+
+export async function marcarPedidoVistoAction(
+  pedidoId: string
+): Promise<ActionResponse<{ ok: true }>> {
+  try {
+    await requireSession();
+    if (!pedidoId) return { ok: false, error: 'Pedido inválido.' };
+    await marcarPedidoVistoDal(pedidoId);
+    revalidatePath('/');
+    return { ok: true, data: { ok: true } };
+  } catch (err) {
+    return { ok: false, error: toActionError(err, 'No se pudo marcar como visto.') };
+  }
+}
+
+export async function reportarIncidenciaDepositoAction(
+  raw: z.infer<typeof IncidenciaSchema>
+): Promise<ActionResponse<Pedido>> {
+  try {
+    await requireSession();
+    const parsed = IncidenciaSchema.safeParse(raw);
+    if (!parsed.success) {
+      return { ok: false, error: parsed.error.issues[0]?.message ?? 'Ingresá el detalle del aviso.' };
+    }
+    const updated = await reportarIncidenciaDepositoDal(parsed.data.pedidoId, parsed.data.mensaje);
+    revalidatePath('/');
+    return { ok: true, data: updated };
+  } catch (err) {
+    return { ok: false, error: toActionError(err, 'No se pudo registrar el aviso.') };
+  }
+}
+
+export async function resolverIncidenciaAction(
+  pedidoId: string
+): Promise<ActionResponse<Pedido>> {
+  try {
+    await requireAdmin();
+    const updated = await resolverIncidenciaDepositoDal(pedidoId);
+    revalidatePath('/');
+    return { ok: true, data: updated };
+  } catch (err) {
+    return { ok: false, error: toActionError(err, 'No se pudo resolver el aviso.') };
   }
 }
 

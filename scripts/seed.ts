@@ -8,7 +8,7 @@ const usuarios = pgTable('usuarios', {
   id: uuid('id').defaultRandom().primaryKey(),
   username: text('username').notNull().unique(),
   nombre: text('nombre').notNull(),
-  rol: text('rol').$type<'ADMIN' | 'VENTAS_DEPOSITO'>().notNull(),
+  rol: text('rol').$type<'ADMIN' | 'VENTAS' | 'DEPOSITO' | 'VENTAS_DEPOSITO'>().notNull(),
   passwordHash: text('password_hash').notNull(),
   activo: boolean('activo').notNull().default(true),
   tokenVersion: integer('token_version').notNull().default(1),
@@ -40,13 +40,18 @@ async function main(): Promise<void> {
   const client = postgres(dbUrl, { prepare: false, ssl: 'require', max: 1 });
   const db = drizzle(client);
 
-  const seedUsers: Array<{ username: string; nombre: string; rol: 'ADMIN' | 'VENTAS_DEPOSITO'; password: string }> = [
+  const seedUsers: Array<{
+    username: string;
+    nombre: string;
+    rol: 'ADMIN' | 'VENTAS' | 'DEPOSITO' | 'VENTAS_DEPOSITO';
+    password: string;
+  }> = [
     { username: 'admin', nombre: 'Administración', rol: 'ADMIN', password: adminPassword },
-    { username: 'juancho', nombre: 'Juancho', rol: 'VENTAS_DEPOSITO', password: ventasPassword },
-    { username: 'pablo', nombre: 'Pablo Palacios', rol: 'VENTAS_DEPOSITO', password: ventasPassword },
-    { username: 'agustin', nombre: 'Agustín', rol: 'VENTAS_DEPOSITO', password: ventasPassword },
-    { username: 'rocio', nombre: 'Rocío', rol: 'VENTAS_DEPOSITO', password: ventasPassword },
-    { username: 'deposito', nombre: 'Depósito', rol: 'VENTAS_DEPOSITO', password: ventasPassword }
+    { username: 'juancho', nombre: 'Juancho', rol: 'VENTAS', password: ventasPassword },
+    { username: 'pablo', nombre: 'Pablo Palacios', rol: 'VENTAS', password: ventasPassword },
+    { username: 'agustin', nombre: 'Agustín', rol: 'VENTAS', password: ventasPassword },
+    { username: 'rocio', nombre: 'Rocío', rol: 'VENTAS', password: ventasPassword },
+    { username: 'deposito', nombre: 'Depósito', rol: 'DEPOSITO', password: ventasPassword }
   ];
 
   for (const item of seedUsers) {

@@ -1,8 +1,19 @@
 'use client';
 
 import React, { useMemo, useRef, useState } from 'react';
-import { AlertTriangle, ArrowLeft, Check, FileSpreadsheet, Lock, MessageCircle, X } from 'lucide-react';
-import { CATALOGO_BY_GRUPO, CATALOGO_MIBI, VENDEDORES_MIBI } from '@/lib/catalogo-mibi';
+import {
+  AlertTriangle,
+  ArrowLeft,
+  Check,
+  FileSpreadsheet,
+  Lock,
+  MessageCircle,
+  Plus,
+  Trash2,
+  X
+} from 'lucide-react';
+import { crearProductoCatalogoAction } from '@/app/actions/catalogo-actions';
+import { VENDEDORES_MIBI } from '@/lib/catalogo-mibi';
 import {
   aplicarResolucionLinea,
   crearLineasEjemploLista006,
@@ -15,9 +26,11 @@ import { addDaysISO, formatARS, formatARSCompacto, fromCents, getTodayISO, round
 import { generarMensajeWhatsApp } from '@/lib/whatsapp';
 import type {
   AdvertenciaExcel,
+  DesgloseVariante,
   LineaPedido,
   MedioPago,
   ProductoCatalogo,
+  ProductoCustomRecord,
   ToneStatus
 } from '@/lib/types';
 
@@ -56,9 +69,16 @@ export const crearFormInicial = (): FormNuevoPedidoState => {
   };
 };
 
+interface CustomVarianteDraft {
+  codigo: string;
+  etiqueta: string;
+  cantidad: string;
+}
+
 interface NuevoPedidoViewProps {
   esAdmin: boolean;
   proximoNumeroPedido: string;
+  catalogoCompleto: ReadonlyArray<ProductoCatalogo>;
   form: FormNuevoPedidoState;
   setForm: React.Dispatch<React.SetStateAction<FormNuevoPedidoState>>;
   lineasBorrador: LineaPedido[];
@@ -74,6 +94,7 @@ interface NuevoPedidoViewProps {
   onVolver: () => void;
   onCopyText: (key: string, text: string, msgOk: string) => void;
   onNotify: (texto: string, tone?: ToneStatus) => void;
+  onProductoCustomCreado: (rec: ProductoCustomRecord) => void;
   onGuardar: (payload: {
     cliente: string;
     vendedor: string;
@@ -95,6 +116,7 @@ interface NuevoPedidoViewProps {
 export function NuevoPedidoView({
   esAdmin,
   proximoNumeroPedido,
+  catalogoCompleto,
   form,
   setForm,
   lineasBorrador,
@@ -110,13 +132,35 @@ export function NuevoPedidoView({
   onVolver,
   onCopyText,
   onNotify,
+  onProductoCustomCreado,
   onGuardar
 }: NuevoPedidoViewProps): React.JSX.Element {
   const [modoCargaManual, setModoCargaManual] = useState<boolean>(false);
   const [busquedaCatalogo, setBusquedaCatalogo] = useState<string>('');
   const [arrastrandoArchivo, setArrastrandoArchivo] = useState<boolean>(false);
-  const [resolucionesManual, setResolucionesManual] = useState<Record<string, { q0: string; q1: string }>>({});
+  const [resolucionesManual, setResolucionesManual] = useState<Record<string, string[]>>({});
   const fileInputListaRef = useRef<HTMLInputElement | null>(null);
+
+  // Estado formulario "+ Producto fuera de planilla"
+  const [mostrarFueraPlanilla, setMostrarFueraPlanilla] = useState<boolean>(false);
+  const [fpNombre, setFpNombre] = useState<string>('');
+  const [fpRubroSel, setFpRubroSel] = useState<string>('PILUSOS');
+  const [fpRubroCustom, setFpRubroCustom] = useState<string>('');
+  const [fpPrecioNeto, setFpPrecioNeto] = useState<string>('');
+  const [fpTipoVar, setFpTipoVar] = useState<'unico' | 'multiple'>('unico');
+  const [fpCodigoUnico, setFpCodigoUnico] = useState<string>('');
+  const [fpCantidadTotal, setFpCantidadTotal] = useState<string>('1');
+  const [fpVariantes, setFpVariantes] = useState<CustomVarianteDraft[]>([
+    { codigo: '', etiqueta: 'T1 (1-3 años)', cantidad: '' },
+    { codigo: '', etiqueta: 'T2 (3-6 años)', cantidad: '' }
+  ]);
+  const [fpGuardarEnCatalogo, setFpGuardarEnCatalogo] = useState<boolean>(true);
+  const [fpGuardando, setFpGuardando] = useState<boolean>(false);
+
+  const rubrosDisponibles = useMemo(
+    () => Array.from(new Set(['PILUSOS', ...catalogoCompleto.map((p) => p.rubro), 'ACCESORIOS'])),
+    [catalogoCompleto]
+  );
 
   const totalesBorrador = useMemo(() => {
     let subtotalCents = 0;
@@ -144,25 +188,26 @@ export function NuevoPedidoView({
 
   const catalogoFiltradoManual = useMemo(
     () =>
-      CATALOGO_MIBI.filter((prod) => {
+      catalogoCompleto.filter((prod) => {
         const q = normalizarTexto(busquedaCatalogo);
         if (!q) return true;
         return (
           normalizarTexto(prod.nombre).includes(q) ||
           normalizarTexto(prod.rubro).includes(q) ||
-          prod.variantes.some((v) => v.codigo.includes(q))
+          prod.variantes.some((v) => normalizarTexto(v.codigo).includes(q))
         );
       }),
-    [busquedaCatalogo]
+    [catalogoCompleto, busquedaCatalogo]
   );
 
   const sincronizarManualConBorrador = (nextMap: Record<string, number>): void => {
     setLineasBorrador((prev) => {
       const prevByGrupo = new Map<string, LineaPedido>();
       for (const l of prev) prevByGrupo.set(l.idGrupo, l);
+      const catIds = new Set(catalogoCompleto.map((c) => c.idGrupo));
 
       const resultado: LineaPedido[] = [];
-      for (const prod of CATALOGO_MIBI) {
+      for (const prod of catalogoCompleto) {
         const qty = nextMap[prod.idGrupo] ?? 0;
         if (qty <= 0) continue;
         const existente = prevByGrupo.get(prod.idGrupo);
@@ -170,6 +215,12 @@ export function NuevoPedidoView({
           resultado.push(existente);
         } else {
           resultado.push(resolverLinea(prod, qty, existente?.notaCliente ?? ''));
+        }
+      }
+      // Conservar productos ad-hoc (no guardados en catálogo)
+      for (const l of prev) {
+        if (!catIds.has(l.idGrupo) && (nextMap[l.idGrupo] ?? l.cantidadTotal) > 0) {
+          resultado.push(l);
         }
       }
       return resultado;
@@ -199,7 +250,7 @@ export function NuevoPedidoView({
   const handleArchivoLista006 = async (file: File): Promise<void> => {
     try {
       const buffer = await file.arrayBuffer();
-      const res = parsearExcelLista006(buffer, file.name);
+      const res = parsearExcelLista006(buffer, file.name, catalogoCompleto);
       if (!res.ok) {
         onNotify(res.errorFatal ?? 'Archivo inválido.', 'red');
         return;
@@ -241,16 +292,150 @@ export function NuevoPedidoView({
     onNotify('Planilla de ejemplo Lista N° 006 cargada ($3.560.673,05 total).', 'green');
   };
 
-  const handleResolverEnBorrador = (idLinea: string, q0: number, q1: number): void => {
+  const handleResolverEnBorrador = (idLinea: string, cantidades: number[]): void => {
     const lineaObj = lineasBorrador.find((l) => l.idLinea === idLinea);
     if (!lineaObj) return;
-    const resuelta = aplicarResolucionLinea(lineaObj, q0, q1);
+    const resuelta = aplicarResolucionLinea(lineaObj, cantidades, catalogoCompleto);
     if (!resuelta) {
       onNotify(`La suma debe ser exactamente ${lineaObj.cantidadTotal} u.`, 'red');
       return;
     }
     setLineasBorrador((prev) => prev.map((l) => (l.idLinea === idLinea ? resuelta : l)));
     onNotify(`${lineaObj.nombreProducto} confirmado.`, 'green');
+  };
+
+  const resetFueraPlanilla = (): void => {
+    setFpNombre('');
+    setFpRubroSel('PILUSOS');
+    setFpRubroCustom('');
+    setFpPrecioNeto('');
+    setFpTipoVar('unico');
+    setFpCodigoUnico('');
+    setFpCantidadTotal('1');
+    setFpVariantes([
+      { codigo: '', etiqueta: 'T1 (1-3 años)', cantidad: '' },
+      { codigo: '', etiqueta: 'T2 (3-6 años)', cantidad: '' }
+    ]);
+    setFpGuardarEnCatalogo(true);
+  };
+
+  const handleAgregarFueraPlanilla = async (e: React.FormEvent<HTMLFormElement>): Promise<void> => {
+    e.preventDefault();
+    const nombre = fpNombre.trim();
+    const rubro = (fpRubroSel === '__OTRO__' ? fpRubroCustom : fpRubroSel).trim().toUpperCase();
+    const precioNeto = round2(parseFloat(fpPrecioNeto.replace(',', '.')) || 0);
+
+    if (!nombre) {
+      onNotify('Ingresá el nombre del artículo.', 'amber');
+      return;
+    }
+    if (!rubro) {
+      onNotify('Ingresá el rubro del artículo.', 'amber');
+      return;
+    }
+
+    const varsLimpias =
+      fpTipoVar === 'unico'
+        ? [{ codigo: fpCodigoUnico.trim(), etiqueta: 'Único', cantidad: fpCantidadTotal }]
+        : fpVariantes.filter((v) => v.etiqueta.trim().length > 0);
+
+    if (varsLimpias.length === 0) {
+      onNotify('Cargá al menos una variante con nombre.', 'amber');
+      return;
+    }
+
+    const cantidadesPorVar = varsLimpias.map((v) => Math.max(0, Math.floor(Number(v.cantidad) || 0)));
+    const sumaVars = cantidadesPorVar.reduce((acc, q) => acc + q, 0);
+    const totalInput = Math.max(0, Math.floor(Number(fpCantidadTotal) || 0));
+    const cantidadTotal = fpTipoVar === 'unico' ? totalInput : sumaVars > 0 ? sumaVars : totalInput;
+
+    if (cantidadTotal <= 0) {
+      onNotify('Ingresá la cantidad pedida (mayor a 0).', 'amber');
+      return;
+    }
+
+    let prodFinal: ProductoCatalogo;
+    if (fpGuardarEnCatalogo) {
+      setFpGuardando(true);
+      const res = await crearProductoCatalogoAction({
+        nombre,
+        rubro,
+        precioNeto,
+        variantes: varsLimpias.map((v) => ({
+          codigo: v.codigo.trim() || undefined,
+          etiqueta: v.etiqueta.trim()
+        }))
+      });
+      setFpGuardando(false);
+      if (!res.ok || !res.data) {
+        onNotify(res.error ?? 'No se pudo guardar en el catálogo.', 'red');
+        return;
+      }
+      const created = res.data;
+      onProductoCustomCreado(created);
+      prodFinal = {
+        idGrupo: created.idGrupo,
+        nombre: created.nombre,
+        rubro: created.rubro,
+        precioNeto: created.precioNeto,
+        variantes: created.variantes,
+        esCustom: true,
+        activo: created.activo,
+        customId: created.id
+      };
+    } else {
+      const adhocId = `ADHOC-${Date.now().toString(36).toUpperCase()}`;
+      prodFinal = {
+        idGrupo: adhocId,
+        nombre,
+        rubro,
+        precioNeto,
+        variantes: varsLimpias.map((v, idx) => ({
+          codigo: v.codigo.trim().toUpperCase() || `${adhocId}-${idx + 1}`,
+          etiqueta: v.etiqueta.trim(),
+          aliases: [normalizarTexto(v.etiqueta)]
+        }))
+      };
+    }
+
+    let nuevaLinea: LineaPedido;
+    if (prodFinal.variantes.length === 1) {
+      nuevaLinea = resolverLinea(prodFinal, cantidadTotal, '');
+    } else if (sumaVars === cantidadTotal && sumaVars > 0) {
+      const desglose: DesgloseVariante[] = prodFinal.variantes.map((v, idx) => ({
+        codigo: v.codigo,
+        etiqueta: v.etiqueta,
+        cantidad: cantidadesPorVar[idx] ?? 0
+      }));
+      nuevaLinea = {
+        idLinea: prodFinal.idGrupo,
+        idGrupo: prodFinal.idGrupo,
+        nombreProducto: prodFinal.nombre,
+        rubro: prodFinal.rubro,
+        precioUnitarioNeto: prodFinal.precioNeto,
+        cantidadTotal,
+        notaCliente: desglose
+          .filter((d) => d.cantidad > 0)
+          .map((d) => `${d.cantidad} ${d.etiqueta}`)
+          .join(' · '),
+        estado: 'OK',
+        requiereRevision: false,
+        desglose
+      };
+    } else {
+      nuevaLinea = resolverLinea(prodFinal, cantidadTotal, '');
+    }
+
+    setLineasBorrador((prev) => [...prev, nuevaLinea]);
+    setCantidadesManuales((prev) => ({ ...prev, [prodFinal.idGrupo]: cantidadTotal }));
+    resetFueraPlanilla();
+    setMostrarFueraPlanilla(false);
+    onNotify(
+      fpGuardarEnCatalogo
+        ? `${prodFinal.nombre} guardado en el catálogo y agregado al pedido.`
+        : `${prodFinal.nombre} agregado solo a este pedido.`,
+      'green'
+    );
   };
 
   const handleSubmit = async (): Promise<void> => {
@@ -308,6 +493,9 @@ export function NuevoPedidoView({
       lineas: lineasBorrador
     });
   };
+
+  const fpPrecioNum = round2(parseFloat(fpPrecioNeto.replace(',', '.')) || 0);
+  const fpPrecioConIva = round2(fpPrecioNum * 1.21);
 
   return (
     <div className="max-w-2xl mx-auto space-y-6">
@@ -522,9 +710,9 @@ export function NuevoPedidoView({
       </section>
 
       <section className="bg-white rounded-2xl border border-[#EAEAEA] shadow-[0_1px_2px_rgba(0,0,0,0.03)] p-6 space-y-4">
-        <div className="flex items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">
-            2. Artículos (LISTA N° 006)
+            2. Artículos (LISTA N° 006 y adicionales)
           </h2>
           <div className="inline-flex items-center p-0.5 rounded-full bg-zinc-100 border border-zinc-200/70">
             <button
@@ -591,7 +779,14 @@ export function NuevoPedidoView({
                 return (
                   <div key={prod.idGrupo} className="px-3.5 py-2.5 flex items-center justify-between gap-3">
                     <div className="min-w-0">
-                      <div className="text-xs font-medium text-[#111111] truncate">{prod.nombre}</div>
+                      <div className="text-xs font-medium text-[#111111] truncate flex items-center gap-1.5">
+                        <span className="truncate">{prod.nombre}</span>
+                        {prod.esCustom && (
+                          <span className="px-1.5 py-0.5 rounded bg-[#FCE7F3] text-[#111111] text-[10px] font-medium shrink-0">
+                            Extra
+                          </span>
+                        )}
+                      </div>
                       <div className="text-[11px] text-zinc-400 tabular-nums">
                         {prod.variantes.map((v) => v.codigo).join(' / ')} · {prod.rubro} ·{' '}
                         {formatARSCompacto(prod.precioNeto)} neto
@@ -612,14 +807,25 @@ export function NuevoPedidoView({
           </div>
         )}
 
-        <div className="flex items-center justify-between pt-1">
-          <button
-            type="button"
-            onClick={handleCargarEjemploLista006}
-            className="text-xs text-zinc-400 hover:text-[#111111] underline underline-offset-2 transition-colors"
-          >
-            Probar con planilla de ejemplo
-          </button>
+        <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              onClick={() => setMostrarFueraPlanilla((prev) => !prev)}
+              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-medium bg-zinc-50 hover:bg-zinc-100 border border-zinc-200 text-[#111111] transition-colors"
+              title="Ej. Pilusos o artículos nuevos"
+            >
+              <Plus className="w-3.5 h-3.5" strokeWidth={1.75} />
+              Producto fuera de planilla
+            </button>
+            <button
+              type="button"
+              onClick={handleCargarEjemploLista006}
+              className="text-xs text-zinc-400 hover:text-[#111111] underline underline-offset-2 transition-colors"
+            >
+              Probar con planilla de ejemplo
+            </button>
+          </div>
           {lineasBorrador.length > 0 && (
             <button
               type="button"
@@ -635,6 +841,243 @@ export function NuevoPedidoView({
             </button>
           )}
         </div>
+
+        {mostrarFueraPlanilla && (
+          <form
+            onSubmit={(e) => void handleAgregarFueraPlanilla(e)}
+            className="bg-[#FAFAFA] rounded-2xl border border-zinc-200/80 p-4 space-y-3.5 text-xs"
+          >
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="font-semibold text-[#111111]">Agregar producto fuera de planilla</div>
+                <div className="text-[11px] text-zinc-500">Ej. Pilusos o artículos nuevos</div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setMostrarFueraPlanilla(false)}
+                className="p-1 text-zinc-400 hover:text-zinc-800"
+              >
+                <X className="w-4 h-4" strokeWidth={1.5} />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-[11px] text-zinc-500 mb-1">Nombre del producto *</label>
+                <input
+                  type="text"
+                  value={fpNombre}
+                  onChange={(e) => setFpNombre(e.target.value)}
+                  placeholder="Ej. Piluso Shark"
+                  className="w-full px-3 py-2 bg-white border border-zinc-200 rounded-xl"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[11px] text-zinc-500 mb-1">Rubro *</label>
+                <div className="flex gap-2">
+                  <select
+                    value={fpRubroSel}
+                    onChange={(e) => setFpRubroSel(e.target.value)}
+                    className="flex-1 px-3 py-2 bg-white border border-zinc-200 rounded-xl"
+                  >
+                    {rubrosDisponibles.map((r) => (
+                      <option key={r} value={r}>
+                        {r}
+                      </option>
+                    ))}
+                    <option value="__OTRO__">Otro rubro...</option>
+                  </select>
+                  {fpRubroSel === '__OTRO__' && (
+                    <input
+                      type="text"
+                      value={fpRubroCustom}
+                      onChange={(e) => setFpRubroCustom(e.target.value)}
+                      placeholder="Ej. PILUSOS"
+                      className="w-28 px-3 py-2 bg-white border border-zinc-200 rounded-xl uppercase"
+                    />
+                  )}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[11px] text-zinc-500 mb-1">Precio neto unitario ($)</label>
+                <input
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  value={fpPrecioNeto}
+                  onChange={(e) => setFpPrecioNeto(e.target.value)}
+                  placeholder="0.00"
+                  className="w-full px-3 py-2 bg-white border border-zinc-200 rounded-xl tabular-nums"
+                />
+                <div className="text-[11px] text-zinc-400 mt-1 tabular-nums">
+                  Con IVA 21%: {formatARS(fpPrecioConIva)}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[11px] text-zinc-500 mb-1">Variantes</label>
+                <div className="grid grid-cols-2 gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setFpTipoVar('unico')}
+                    className={`py-2 px-3 rounded-xl border font-medium ${
+                      fpTipoVar === 'unico'
+                        ? 'bg-zinc-900 text-white border-zinc-900'
+                        : 'bg-white text-zinc-700 border-zinc-200'
+                    }`}
+                  >
+                    Único
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFpTipoVar('multiple')}
+                    className={`py-2 px-3 rounded-xl border font-medium ${
+                      fpTipoVar === 'multiple'
+                        ? 'bg-zinc-900 text-white border-zinc-900'
+                        : 'bg-white text-zinc-700 border-zinc-200'
+                    }`}
+                  >
+                    Con talles o colores
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {fpTipoVar === 'unico' ? (
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[11px] text-zinc-500 mb-1">Código (opcional)</label>
+                  <input
+                    type="text"
+                    value={fpCodigoUnico}
+                    onChange={(e) => setFpCodigoUnico(e.target.value)}
+                    placeholder="Vacío → automático"
+                    className="w-full px-3 py-2 bg-white border border-zinc-200 rounded-xl tabular-nums uppercase"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] text-zinc-500 mb-1">Cantidad pedida *</label>
+                  <input
+                    type="number"
+                    min={1}
+                    value={fpCantidadTotal}
+                    onChange={(e) => setFpCantidadTotal(e.target.value)}
+                    className="w-full px-3 py-2 bg-white border border-zinc-200 rounded-xl tabular-nums"
+                  />
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] text-zinc-500">
+                    Opciones (indicá cantidad en cada una o dejá vacío para definir después)
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setFpVariantes((prev) => [...prev, { codigo: '', etiqueta: '', cantidad: '' }])
+                    }
+                    className="text-[11px] font-medium text-zinc-800 hover:underline inline-flex items-center gap-1"
+                  >
+                    <Plus className="w-3 h-3" strokeWidth={1.75} /> Agregar variante
+                  </button>
+                </div>
+                {fpVariantes.map((v, idx) => (
+                  <div key={idx} className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={v.codigo}
+                      onChange={(e) =>
+                        setFpVariantes((prev) =>
+                          prev.map((item, i) => (i === idx ? { ...item, codigo: e.target.value } : item))
+                        )
+                      }
+                      placeholder="Cód. (opc.)"
+                      className="w-24 px-2.5 py-1.5 bg-white border border-zinc-200 rounded-lg tabular-nums uppercase"
+                    />
+                    <input
+                      type="text"
+                      value={v.etiqueta}
+                      onChange={(e) =>
+                        setFpVariantes((prev) =>
+                          prev.map((item, i) => (i === idx ? { ...item, etiqueta: e.target.value } : item))
+                        )
+                      }
+                      placeholder={`Talle o color #${idx + 1}`}
+                      className="flex-1 px-2.5 py-1.5 bg-white border border-zinc-200 rounded-lg"
+                    />
+                    <input
+                      type="number"
+                      min={0}
+                      value={v.cantidad}
+                      onChange={(e) =>
+                        setFpVariantes((prev) =>
+                          prev.map((item, i) => (i === idx ? { ...item, cantidad: e.target.value } : item))
+                        )
+                      }
+                      placeholder="Cant."
+                      className="w-20 px-2.5 py-1.5 bg-white border border-zinc-200 rounded-lg text-right tabular-nums"
+                    />
+                    {fpVariantes.length > 2 && (
+                      <button
+                        type="button"
+                        onClick={() => setFpVariantes((prev) => prev.filter((_, i) => i !== idx))}
+                        className="p-1.5 text-zinc-400 hover:text-red-600"
+                        aria-label="Quitar variante"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" strokeWidth={1.5} />
+                      </button>
+                    )}
+                  </div>
+                ))}
+
+                {fpVariantes.every((v) => !(parseInt(v.cantidad, 10) > 0)) && (
+                  <div>
+                    <label className="block text-[11px] text-zinc-500 mb-1">
+                      Cantidad total pendiente de definir
+                    </label>
+                    <input
+                      type="number"
+                      min={1}
+                      value={fpCantidadTotal}
+                      onChange={(e) => setFpCantidadTotal(e.target.value)}
+                      className="w-32 px-3 py-1.5 bg-white border border-zinc-200 rounded-lg tabular-nums"
+                    />
+                  </div>
+                )}
+              </div>
+            )}
+
+            <label className="flex items-center gap-2 pt-1 cursor-pointer select-none text-zinc-700">
+              <input
+                type="checkbox"
+                checked={fpGuardarEnCatalogo}
+                onChange={(e) => setFpGuardarEnCatalogo(e.target.checked)}
+                className="w-4 h-4 rounded border-zinc-300 text-zinc-900 accent-zinc-900"
+              />
+              <span>Guardar en el catálogo para próximos pedidos</span>
+            </label>
+
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setMostrarFueraPlanilla(false)}
+                className="px-3.5 py-2 rounded-full border border-zinc-200 bg-white text-zinc-600"
+              >
+                Cancelar
+              </button>
+              <button
+                type="submit"
+                disabled={fpGuardando}
+                className="px-4 py-2 rounded-full bg-zinc-900 text-white font-medium hover:bg-zinc-800 disabled:opacity-50"
+              >
+                {fpGuardando ? 'Guardando...' : 'Agregar al pedido'}
+              </button>
+            </div>
+          </form>
+        )}
       </section>
 
       {advertenciasExcel.length > 0 && (
@@ -672,7 +1115,12 @@ export function NuevoPedidoView({
             <button
               type="button"
               onClick={() => {
-                const msg = generarMensajeWhatsApp(form.cliente.trim(), proximoNumeroPedido, lineasBorrador);
+                const msg = generarMensajeWhatsApp(
+                  form.cliente.trim(),
+                  proximoNumeroPedido,
+                  lineasBorrador,
+                  catalogoCompleto
+                );
                 onCopyText('borrador-wsp', msg, 'Mensaje de consulta copiado para WhatsApp.');
               }}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-white border border-red-200 text-red-700 hover:bg-red-50"
@@ -690,12 +1138,11 @@ export function NuevoPedidoView({
             {lineasBorrador
               .filter((l) => l.requiereRevision || l.estado !== 'OK')
               .map((l) => {
-                const prod = CATALOGO_BY_GRUPO.get(l.idGrupo);
-                if (!prod || prod.variantes.length < 2) return null;
-                const v0 = prod.variantes[0]!;
-                const v1 = prod.variantes[1]!;
+                const prod = catalogoCompleto.find((p) => p.idGrupo === l.idGrupo);
+                const variantes = prod ? prod.variantes : l.desglose;
+                if (variantes.length < 2) return null;
                 const key = `borr_${l.idLinea}`;
-                const cur = resolucionesManual[key] ?? { q0: '0', q1: '0' };
+                const cur = resolucionesManual[key] ?? variantes.map(() => '0');
                 return (
                   <div key={l.idLinea} className="bg-white rounded-xl border border-red-200/70 p-3.5 space-y-2">
                     <div className="flex items-center justify-between text-xs">
@@ -704,49 +1151,32 @@ export function NuevoPedidoView({
                     </div>
                     {l.motivoRevision && <p className="text-[11px] text-red-600">{l.motivoRevision}</p>}
                     <div className="flex flex-wrap items-end gap-2">
-                      <div className="flex-1 min-w-[110px]">
-                        <label className="block text-[11px] text-zinc-500 mb-1">
-                          {v0.etiqueta} ({v0.codigo})
-                        </label>
-                        <input
-                          type="number"
-                          min={0}
-                          max={l.cantidadTotal}
-                          value={cur.q0}
-                          onChange={(e) =>
-                            setResolucionesManual((prev) => ({
-                              ...prev,
-                              [key]: { ...cur, q0: e.target.value }
-                            }))
-                          }
-                          className="w-full px-2.5 py-1.5 text-xs bg-white border border-zinc-200 rounded-lg tabular-nums"
-                        />
-                      </div>
-                      <div className="flex-1 min-w-[110px]">
-                        <label className="block text-[11px] text-zinc-500 mb-1">
-                          {v1.etiqueta} ({v1.codigo})
-                        </label>
-                        <input
-                          type="number"
-                          min={0}
-                          max={l.cantidadTotal}
-                          value={cur.q1}
-                          onChange={(e) =>
-                            setResolucionesManual((prev) => ({
-                              ...prev,
-                              [key]: { ...cur, q1: e.target.value }
-                            }))
-                          }
-                          className="w-full px-2.5 py-1.5 text-xs bg-white border border-zinc-200 rounded-lg tabular-nums"
-                        />
-                      </div>
+                      {variantes.map((v, vIdx) => (
+                        <div key={v.codigo} className="flex-1 min-w-[110px]">
+                          <label className="block text-[11px] text-zinc-500 mb-1">
+                            {v.etiqueta} ({v.codigo})
+                          </label>
+                          <input
+                            type="number"
+                            min={0}
+                            max={l.cantidadTotal}
+                            value={cur[vIdx] ?? '0'}
+                            onChange={(e) => {
+                              const nextArr = variantes.map((_, idx) =>
+                                idx === vIdx ? e.target.value : (cur[idx] ?? '0')
+                              );
+                              setResolucionesManual((prev) => ({ ...prev, [key]: nextArr }));
+                            }}
+                            className="w-full px-2.5 py-1.5 text-xs bg-white border border-zinc-200 rounded-lg tabular-nums"
+                          />
+                        </div>
+                      ))}
                       <button
                         type="button"
                         onClick={() =>
                           handleResolverEnBorrador(
                             l.idLinea,
-                            parseInt(cur.q0, 10) || 0,
-                            parseInt(cur.q1, 10) || 0
+                            variantes.map((_, idx) => parseInt(cur[idx] ?? '0', 10) || 0)
                           )
                         }
                         className="px-3.5 py-1.5 rounded-full text-xs font-medium bg-zinc-900 hover:bg-zinc-800 text-white"
