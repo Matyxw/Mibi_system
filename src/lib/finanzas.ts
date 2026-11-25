@@ -161,9 +161,15 @@ export const recalcularPedido = (base: PedidoBase): Pedido => {
   }
 
   let chequeCents = 0;
-  if (base.medioPago === 'Cheque' && !base.chequeAcreditado) {
-    const inputChequeCents = toCents(base.montoCheque);
-    chequeCents = Math.max(0, inputChequeCents > 0 ? inputChequeCents : finalTotalCents - abonadoCents);
+  let chequeAcreditado = base.chequeAcreditado;
+  if (base.medioPago === 'Cheque' && !chequeAcreditado) {
+    if (finalTotalCents > 0 && abonadoCents >= finalTotalCents - 1) {
+      chequeAcreditado = true;
+      chequeCents = 0;
+    } else {
+      const inputChequeCents = toCents(base.montoCheque);
+      chequeCents = Math.max(0, inputChequeCents > 0 ? inputChequeCents : finalTotalCents - abonadoCents);
+    }
   }
   if (abonadoCents + chequeCents > finalTotalCents) {
     chequeCents = Math.max(0, finalTotalCents - abonadoCents);
@@ -173,7 +179,7 @@ export const recalcularPedido = (base: PedidoBase): Pedido => {
   const deudaSinRespaldoCents = Math.max(0, finalTotalCents - abonadoCents - chequeCents);
 
   let estadoPago: EstadoPago;
-  if (base.medioPago === 'Cheque' && !base.chequeAcreditado) {
+  if (base.medioPago === 'Cheque' && !chequeAcreditado) {
     estadoPago = saldoCents <= 1 ? 'Pagado' : 'Pendiente';
   } else if (saldoCents <= 1 && finalTotalCents > 0) {
     estadoPago = 'Pagado';
@@ -197,6 +203,7 @@ export const recalcularPedido = (base: PedidoBase): Pedido => {
     descuentoPorc,
     montoAbonado: fromCents(abonadoCents),
     montoCheque: fromCents(chequeCents),
+    chequeAcreditado,
     estadoArmado,
     subtotalNeto: fromCents(finalSubtotalCents),
     montoDescuento: fromCents(finalDescuentoCents),

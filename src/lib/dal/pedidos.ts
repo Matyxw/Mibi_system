@@ -80,6 +80,13 @@ export interface PatchPedidoInput {
   lineas?: LineaPedido[];
 }
 
+export class ConflictError extends Error {
+  constructor(message = 'Este pedido fue modificado por otro usuario. Actualizá antes de guardar.') {
+    super(message);
+    this.name = 'ConflictError';
+  }
+}
+
 export type BatchActionInput =
   | { type: 'armado'; estadoArmado: 'En armado' | 'Listo' }
   | { type: 'envio'; estadoEnvio: 'Despachado' | 'Entregado'; transporte?: string }
@@ -831,17 +838,48 @@ const applyPatchToPedido = (
   const nextLineas = patch.lineas
     ? sanitizarLineasContraCatalogo(patch.lineas, customCatalogo)
     : actual.lineas;
+  const faltantesSiguiente = nextLineas.filter((l) => l.requiereRevision || l.estado !== 'OK').length;
 
+  if (
+    faltantesSiguiente > 0 &&
+    (patch.estadoArmado === 'Listo' || patch.estadoEnvio === 'Despachado' || patch.estadoEnvio === 'Entregado')
+  ) {
+    throw new Error(
+      'No se puede marcar como Listo, Despachado ni Entregado mientras falte definir talle o color.'
+    );
+  }
+
+  let nextEstadoArmado: EstadoArmado =
+    patch.estadoArmado !== undefined ? patch.estadoArmado : actual.estadoArmado;
   const nextEstadoEnvio = patch.estadoEnvio ?? actual.estadoEnvio;
   let nextFechaDespacho = patch.fechaDespacho !== undefined ? patch.fechaDespacho : actual.fechaDespacho;
   let nextFechaEntrega = patch.fechaEntrega !== undefined ? patch.fechaEntrega : actual.fechaEntrega;
 
-  if (patch.estadoEnvio === 'Despachado' && !nextFechaDespacho) {
-    nextFechaDespacho = hoy;
-  }
-  if (patch.estadoEnvio === 'Entregado') {
+  if (patch.estadoEnvio === 'Despachado') {
+    if (faltantesSiguiente === 0 && (nextEstadoArmado === 'Por armar' || nextEstadoArmado === 'En armado')) {
+      nextEstadoArmado = 'Listo';
+    }
+    if (!nextFechaDespacho) nextFechaDespacho = hoy;
+    if (patch.fechaEntrega === undefined) nextFechaEntrega = '';
+  } else if (patch.estadoEnvio === 'Entregado') {
+    if (faltantesSiguiente === 0) {
+      nextEstadoArmado = 'Listo';
+    }
     if (!nextFechaDespacho) nextFechaDespacho = hoy;
     if (!nextFechaEntrega) nextFechaEntrega = hoy;
+  } else if (patch.estadoEnvio === 'Pendiente') {
+    if (patch.fechaDespacho === undefined) nextFechaDespacho = '';
+    if (patch.fechaEntrega === undefined) nextFechaEntrega = '';
+  }
+
+  let nextFechaAcreditacionCheque =
+    patch.fechaAcreditacionCheque !== undefined ? patch.fechaAcreditacionCheque : actual.fechaAcreditacionCheque;
+  if (
+    patch.fechaRecepcionCheque !== undefined &&
+    /^\d{4}-\d{2}-\d{2}$/.test(patch.fechaRecepcionCheque) &&
+    patch.fechaAcreditacionCheque === undefined
+  ) {
+    nextFechaAcreditacionCheque = addDaysISO(patch.fechaRecepcionCheque, 30);
   }
 
   const evento: HistorialEvento = {
@@ -864,10 +902,9 @@ const applyPatchToPedido = (
     chequeAcreditado: patch.chequeAcreditado !== undefined ? patch.chequeAcreditado : actual.chequeAcreditado,
     fechaRecepcionCheque:
       patch.fechaRecepcionCheque !== undefined ? patch.fechaRecepcionCheque : actual.fechaRecepcionCheque,
-    fechaAcreditacionCheque:
-      patch.fechaAcreditacionCheque !== undefined ? patch.fechaAcreditacionCheque : actual.fechaAcreditacionCheque,
+    fechaAcreditacionCheque: nextFechaAcreditacionCheque,
     detalleCheque: patch.detalleCheque !== undefined ? patch.detalleCheque : actual.detalleCheque,
-    estadoArmado: patch.estadoArmado !== undefined ? patch.estadoArmado : actual.estadoArmado,
+    estadoArmado: nextEstadoArmado,
     estadoEnvio: nextEstadoEnvio,
     fechaDespacho: nextFechaDespacho,
     fechaEntrega: nextFechaEntrega,
@@ -886,7 +923,8 @@ const applyPatchToPedido = (
 export const patchPedidoDal = async (
   pedidoId: string,
   patch: PatchPedidoInput,
-  motivo: string
+  motivo: string,
+  expectedVersion?: number
 ): Promise<Pedido> => {
   const session = await requireSession();
   const esAdmin = session.rol === 'ADMIN';
@@ -916,6 +954,9 @@ export const patchPedidoDal = async (
     const actualWithAsig = attachLocalAsignaciones([store.pedidos[idx]!], store.pedidoAsignaciones)[0]!;
     if (!isPedidoVisibleForSession(actualWithAsig, session)) {
       throw new AuthError('No tenés acceso a este pedido.', 403);
+    }
+    if (expectedVersion !== undefined && actualWithAsig.version !== expectedVersion) {
+      throw new ConflictError();
     }
 
     let actualizado = applyPatchToPedido(
@@ -993,6 +1034,9 @@ export const patchPedidoDal = async (
     if (!isPedidoVisibleForSession(actual, session)) {
       throw new AuthError('No tenés acceso a este pedido.', 403);
     }
+    if (expectedVersion !== undefined && actual.version !== expectedVersion) {
+      throw new ConflictError();
+    }
 
     let actualizado = applyPatchToPedido(
       actual,
@@ -1019,21 +1063,12 @@ export const patchPedidoDal = async (
         ...(patch.montoAbonado !== undefined || patch.descuentoPorc !== undefined || patch.lineas !== undefined
           ? { montoAbonado: toNumericString(actualizado.montoAbonado) }
           : {}),
-        ...(patch.montoCheque !== undefined ||
-        patch.medioPago !== undefined ||
-        patch.chequeAcreditado !== undefined ||
-        patch.montoAbonado !== undefined ||
-        patch.descuentoPorc !== undefined ||
-        patch.lineas !== undefined
-          ? { montoCheque: toNumericString(actualizado.montoCheque) }
-          : {}),
-        ...(patch.chequeAcreditado !== undefined ? { chequeAcreditado: actualizado.chequeAcreditado } : {}),
+        montoCheque: toNumericString(actualizado.montoCheque),
+        chequeAcreditado: actualizado.chequeAcreditado,
         ...(patch.fechaRecepcionCheque !== undefined
           ? { fechaRecepcionCheque: actualizado.fechaRecepcionCheque || null }
           : {}),
-        ...(patch.fechaAcreditacionCheque !== undefined
-          ? { fechaAcreditacionCheque: actualizado.fechaAcreditacionCheque || null }
-          : {}),
+        fechaAcreditacionCheque: actualizado.fechaAcreditacionCheque || null,
         ...(patch.detalleCheque !== undefined ? { detalleCheque: actualizado.detalleCheque } : {}),
         ...(patch.transporte !== undefined ? { transporte: actualizado.transporte } : {}),
         ...(patch.nroSeguimiento !== undefined ? { nroSeguimiento: actualizado.nroSeguimiento } : {}),
@@ -1730,6 +1765,10 @@ export const batchUpdatePedidosDal = async (
       );
       actualizados += 1;
     } else if (action.type === 'envio') {
+      if (p.faltantesVariante > 0) {
+        omitidos.push(`#${p.numeroPedido}`);
+        continue;
+      }
       const transp = action.transporte?.trim();
       await patchPedidoDal(
         p.id,

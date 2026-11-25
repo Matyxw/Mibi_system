@@ -5,8 +5,16 @@ export type EstadoEnvio = 'Pendiente' | 'Despachado' | 'Entregado';
 export type EstadoLinea = 'OK' | 'REQUIERE_REVISION';
 export type AlertaCheque = 'VENCIDO' | 'VENCE_HOY' | 'EN_PLAZO' | null;
 export type VistaActiva = 'pedidos' | 'nuevo';
+export type DrawerFocusTarget = 'talles' | 'transporte' | 'derivacion' | null;
+export interface ClienteConocido {
+  cliente: string;
+  vendedor: string;
+  whatsapp: string;
+}
 export type FiltroPedidos =
   | 'todos'
+  | 'pendientes_armado'
+  | 'pagados'
   | 'falta_talle'
   | 'cheques'
   | 'falta_pago'

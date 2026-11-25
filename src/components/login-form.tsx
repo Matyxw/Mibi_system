@@ -2,6 +2,7 @@
 
 import React, { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { Eye, EyeOff } from 'lucide-react';
 import { MIBI_BRAND } from '@/lib/catalogo-mibi';
 import { loginAction } from '@/app/actions/auth-actions';
 import { MibiLogo } from './mibi-logo';
@@ -11,6 +12,7 @@ export function LoginForm({ isLocalDev }: { isLocalDev: boolean }): React.JSX.El
   const router = useRouter();
   const [username, setUsername] = useState<string>('');
   const [password, setPassword] = useState<string>('');
+  const [mostrarPassword, setMostrarPassword] = useState<boolean>(false);
   const [error, setError] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(false);
 
@@ -83,14 +85,29 @@ export function LoginForm({ isLocalDev }: { isLocalDev: boolean }): React.JSX.El
 
           <div>
             <label className="block text-xs font-medium text-zinc-600 dark:text-zinc-300 mb-1.5">Contraseña</label>
-            <input
-              type="password"
-              autoComplete="current-password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="Ingresá tu contraseña"
-              className="w-full px-3.5 py-2.5 text-sm bg-white dark:bg-[#1B1B1F] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-xl placeholder:text-zinc-400 dark:placeholder:text-zinc-500 focus:outline-none focus:border-zinc-900 dark:focus:border-[#F4B6CE]/70 focus:ring-2 focus:ring-pink-200/60 dark:focus:ring-[#F4B6CE]/20 transition-all"
-            />
+            <div className="relative">
+              <input
+                type={mostrarPassword ? 'text' : 'password'}
+                autoComplete="current-password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="Ingresá tu contraseña"
+                className="w-full pl-3.5 pr-10 py-2.5 text-sm bg-white dark:bg-[#1B1B1F] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-xl placeholder:text-zinc-400 dark:placeholder:text-zinc-500 focus:outline-none focus:border-zinc-900 dark:focus:border-[#F4B6CE]/70 focus:ring-2 focus:ring-pink-200/60 dark:focus:ring-[#F4B6CE]/20 transition-all"
+              />
+              <button
+                type="button"
+                onClick={() => setMostrarPassword((prev) => !prev)}
+                aria-label={mostrarPassword ? 'Ocultar contraseña' : 'Mostrar contraseña'}
+                title={mostrarPassword ? 'Ocultar contraseña' : 'Mostrar contraseña'}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 rounded-full text-zinc-400 hover:text-zinc-700 dark:text-zinc-500 dark:hover:text-zinc-200 transition-colors"
+              >
+                {mostrarPassword ? (
+                  <EyeOff className="w-4 h-4" strokeWidth={1.5} />
+                ) : (
+                  <Eye className="w-4 h-4" strokeWidth={1.5} />
+                )}
+              </button>
+            </div>
           </div>
 
           {error && <p className="text-xs text-red-600 dark:text-red-400">{error}</p>}

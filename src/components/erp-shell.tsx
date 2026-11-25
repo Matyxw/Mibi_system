@@ -3,11 +3,13 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   BookOpen,
+  ChevronDown,
   Download,
+  FileSpreadsheet,
   LogOut,
   Package,
   Plus,
-  RotateCcw,
+  RefreshCw,
   Search,
   Undo2,
   Upload,
@@ -33,7 +35,6 @@ import {
 } from '@/app/actions/pedidos-actions';
 import { listarCuentasAsignablesAction } from '@/app/actions/usuarios-actions';
 import { CATALOGO_MIBI, MIBI_BRAND } from '@/lib/catalogo-mibi';
-import { ThemeToggle } from './theme-toggle';
 import type { EnviarCuentasResult, SyncStatusResult } from '@/lib/dal/pedidos';
 import { aplicarResolucionLinea } from '@/lib/excel-parser';
 import {
@@ -47,8 +48,11 @@ import {
 } from '@/lib/finanzas';
 import {
   isDepositoRole,
+  rolUsuarioToLabel,
   type AdvertenciaExcel,
   type BatchPanelActivo,
+  type ClienteConocido,
+  type DrawerFocusTarget,
   type FiltroPedidos,
   type LineaPedido,
   type MedioPago,
@@ -70,13 +74,22 @@ import { MibiLogo } from './mibi-logo';
 import { crearFormInicial, NuevoPedidoView, type FormNuevoPedidoState } from './nuevo-pedido-view';
 import { PedidoDrawer } from './pedido-drawer';
 import { PedidosTable } from './pedidos-table';
+import { ThemeToggle } from './theme-toggle';
 
 const LS_FILTERS_KEY = 'mibi_erp_filtros_v3';
+const TRANSPORTES_BASE = ['Andreani', 'Cruz del Sur', 'Vía Cargo', 'OCA', 'Expreso'] as const;
 
 interface PendingUndoDelete {
   pedidos: Pedido[];
   timerId: number;
 }
+
+const getInitials = (nombre: string): string => {
+  const parts = nombre.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return 'M';
+  if (parts.length === 1) return parts[0]!.slice(0, 2).toUpperCase();
+  return `${parts[0]![0] ?? ''}${parts[1]![0] ?? ''}`.toUpperCase();
+};
 
 const copyTextSafe = (text: string): void => {
   if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
@@ -139,12 +152,15 @@ export function ErpShell({
   const [busqueda, setBusqueda] = useState<string>('');
   const [filtro, setFiltro] = useState<FiltroPedidos>('todos');
   const [drawerPedidoId, setDrawerPedidoId] = useState<string | null>(null);
+  const [drawerFocusTarget, setDrawerFocusTarget] = useState<DrawerFocusTarget>(null);
   const [modalEquipoAbierto, setModalEquipoAbierto] = useState<boolean>(false);
   const [modalCatalogoAbierto, setModalCatalogoAbierto] = useState<boolean>(false);
+  const [menuAbierto, setMenuAbierto] = useState<'herramientas' | 'cuenta' | null>(null);
   const [toast, setToast] = useState<ToastState | null>(null);
+  const [conflictoVersion, setConflictoVersion] = useState<boolean>(false);
   const [copiadoId, setCopiadoId] = useState<string | null>(null);
-  const [confirmReiniciar, setConfirmReiniciar] = useState<boolean>(false);
   const [guardandoPedido, setGuardandoPedido] = useState<boolean>(false);
+  const [pendingKeys, setPendingKeys] = useState<Set<string>>(() => new Set<string>());
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set<string>());
   const [lastSelectedId, setLastSelectedId] = useState<string | null>(null);
@@ -160,9 +176,29 @@ export function ErpShell({
   const toastTimerRef = useRef<number | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const fileInputGeneralRef = useRef<HTMLInputElement | null>(null);
+  const headerMenusRef = useRef<HTMLDivElement | null>(null);
   const lastSyncRef = useRef<{ fingerprint: string }>({
     fingerprint: `${initialPedidos.length}:init:${initialPedidos.reduce((acc, p) => Math.max(acc, p.updatedAt), 0)}`
   });
+
+  const withLock = useCallback(async <T,>(key: string, fn: () => Promise<T>): Promise<T | undefined> => {
+    setPendingKeys((prev) => {
+      if (prev.has(key)) return prev;
+      const next = new Set(prev);
+      next.add(key);
+      return next;
+    });
+    try {
+      return await fn();
+    } finally {
+      setPendingKeys((prev) => {
+        if (!prev.has(key)) return prev;
+        const next = new Set(prev);
+        next.delete(key);
+        return next;
+      });
+    }
+  }, []);
 
   const catalogoCompleto = useMemo<ProductoCatalogo[]>(() => {
     const customMapped: ProductoCatalogo[] = productosCustom
@@ -179,6 +215,31 @@ export function ErpShell({
       }));
     return [...CATALOGO_MIBI, ...customMapped];
   }, [productosCustom]);
+
+  const transportesConocidos = useMemo<string[]>(() => {
+    const set = new Set<string>(TRANSPORTES_BASE);
+    for (const p of pedidos) {
+      const t = p.transporte.trim();
+      if (t) set.add(t);
+    }
+    return Array.from(set);
+  }, [pedidos]);
+
+  const clientesConocidos = useMemo<ClienteConocido[]>(() => {
+    const seen = new Map<string, ClienteConocido>();
+    for (const p of pedidos) {
+      const key = p.cliente.trim().toLowerCase();
+      if (!key) continue;
+      if (!seen.has(key)) {
+        seen.set(key, {
+          cliente: p.cliente.trim(),
+          vendedor: p.vendedor,
+          whatsapp: p.whatsapp.trim()
+        });
+      }
+    }
+    return Array.from(seen.values());
+  }, [pedidos]);
 
   const notify = useCallback((texto: string, tone: ToneStatus = 'neutral'): void => {
     if (toastTimerRef.current !== null) {
@@ -219,6 +280,8 @@ export function ErpShell({
       ]);
       const validosAdminVentas = new Set([
         'todos',
+        'pendientes_armado',
+        'pagados',
         'falta_talle',
         'cheques',
         'falta_pago',
@@ -242,6 +305,18 @@ export function ErpShell({
     }
   }, [busqueda, filtro]);
 
+  // Cerrar menús de cabecera al hacer clic afuera
+  useEffect(() => {
+    if (!menuAbierto) return;
+    const onMouseDown = (e: MouseEvent): void => {
+      if (headerMenusRef.current && !headerMenusRef.current.contains(e.target as Node)) {
+        setMenuAbierto(null);
+      }
+    };
+    document.addEventListener('mousedown', onMouseDown);
+    return () => document.removeEventListener('mousedown', onMouseDown);
+  }, [menuAbierto]);
+
   const refrescarCatalogoDesdeServidor = useCallback(async (): Promise<void> => {
     const res = await listarProductosCustomAction(false);
     if (res.ok && res.data) {
@@ -261,6 +336,7 @@ export function ErpShell({
     const res = await listarPedidosAction();
     if (res.ok && res.data) {
       setPedidos(res.data);
+      setConflictoVersion(false);
     }
   }, []);
 
@@ -320,6 +396,20 @@ export function ErpShell({
     }
   }, [selectedIds.size]);
 
+  const hayBorradorSinGuardar =
+    lineasBorrador.length > 0 || form.cliente.trim().length > 0 || form.observaciones.trim().length > 0;
+
+  // Protección anti-pérdida de borrador al cerrar/recargar pestaña
+  useEffect(() => {
+    if (!hayBorradorSinGuardar) return;
+    const onBeforeUnload = (e: BeforeUnloadEvent): void => {
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [hayBorradorSinGuardar]);
+
   // Atajos de teclado globales (/, Cmd/Ctrl+K, N, Escape)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent): void => {
@@ -333,6 +423,10 @@ export function ErpShell({
       );
 
       if (e.key === 'Escape') {
+        if (menuAbierto) {
+          setMenuAbierto(null);
+          return;
+        }
         if (modalCatalogoAbierto) {
           setModalCatalogoAbierto(false);
           return;
@@ -385,7 +479,16 @@ export function ErpShell({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [vista, esDeposito, modalEquipoAbierto, modalCatalogoAbierto, drawerPedidoId, batchPanel, selectedIds.size]);
+  }, [
+    vista,
+    esDeposito,
+    menuAbierto,
+    modalEquipoAbierto,
+    modalCatalogoAbierto,
+    drawerPedidoId,
+    batchPanel,
+    selectedIds.size
+  ]);
 
   const resumenFinanciero = useMemo<ResumenFinanciero>(
     () => calcularResumenFinanciero(pedidos),
@@ -418,6 +521,13 @@ export function ErpShell({
 
     return {
       todos: pedidos.length,
+      pendientes_armado: pedidos.filter(
+        (p) =>
+          p.estadoArmado === 'Por armar' ||
+          p.estadoArmado === 'En armado' ||
+          p.estadoArmado === 'Falta talle o color'
+      ).length,
+      pagados: pedidos.filter((p) => p.estadoPago === 'Pagado').length,
       falta_talle: pedidos.filter((p) => p.faltantesVariante > 0).length,
       cheques: pedidos.filter((p) => p.medioPago === 'Cheque' && !p.chequeAcreditado).length,
       falta_pago: pedidos.filter((p) => p.estadoPago === 'Falta pago').length,
@@ -434,6 +544,15 @@ export function ErpShell({
   const pedidosFiltrados = useMemo<Pedido[]>(() => {
     const q = busqueda.trim().toLowerCase();
     const filtrados = pedidos.filter((p) => {
+      if (
+        filtro === 'pendientes_armado' &&
+        p.estadoArmado !== 'Por armar' &&
+        p.estadoArmado !== 'En armado' &&
+        p.estadoArmado !== 'Falta talle o color'
+      ) {
+        return false;
+      }
+      if (filtro === 'pagados' && p.estadoPago !== 'Pagado') return false;
       if (filtro === 'falta_talle' && p.faltantesVariante === 0) return false;
       if (filtro === 'cheques' && !(p.medioPago === 'Cheque' && !p.chequeAcreditado)) return false;
       if (filtro === 'falta_pago' && p.estadoPago !== 'Falta pago') return false;
@@ -515,9 +634,6 @@ export function ErpShell({
     [pedidos, drawerPedidoId]
   );
 
-  const hayBorradorSinGuardar =
-    lineasBorrador.length > 0 || form.cliente.trim().length > 0 || form.observaciones.trim().length > 0;
-
   const proximoNumeroPedido = useMemo<string>(() => {
     const maxNum = pedidos.reduce((acc, p) => {
       const n = parseInt(p.numeroPedido.replace(/\D/g, ''), 10);
@@ -526,8 +642,13 @@ export function ErpShell({
     return String(maxNum + 1).padStart(4, '0');
   }, [pedidos]);
 
-  const handleOpenDrawer = (id: string): void => {
+  const toggleKpiFiltro = (targetFiltro: FiltroPedidos): void => {
+    setFiltro((prev) => (prev === targetFiltro ? 'todos' : targetFiltro));
+  };
+
+  const handleOpenDrawer = (id: string, focusTarget: DrawerFocusTarget = null): void => {
     setDrawerPedidoId(id);
+    setDrawerFocusTarget(focusTarget);
     if (!esAdmin) {
       const target = pedidos.find((p) => p.id === id);
       const miAsig = target?.asignaciones.find((a) => a.usuarioId === session.userId);
@@ -555,55 +676,89 @@ export function ErpShell({
   const handlePatchPedido = async (
     pedidoId: string,
     patch: Record<string, unknown>,
-    motivo: string
-  ): Promise<void> => {
-    const res = await patchPedidoAction({ pedidoId, patch, motivo });
+    motivo: string,
+    expectedVersion?: number
+  ): Promise<boolean> => {
+    const res = await patchPedidoAction({ pedidoId, patch, motivo, expectedVersion });
     if (!res.ok || !res.data) {
+      if (res.conflict) {
+        setConflictoVersion(true);
+      }
       notify(res.error ?? 'No se pudo actualizar el pedido.', 'red');
-      return;
+      return false;
     }
     const updated = res.data;
+    setConflictoVersion(false);
     setPedidos((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
+    return true;
   };
 
-  const handleConfirmarAcreditacion = (pedido: Pedido): void => {
+  const handleQuickArmado = async (pedido: Pedido, nuevoEstado: 'En armado' | 'Listo'): Promise<void> => {
+    await withLock(`armado:${pedido.id}`, async () => {
+      const ok = await handlePatchPedido(
+        pedido.id,
+        { estadoArmado: nuevoEstado },
+        `Cambió armado a ${nuevoEstado}`,
+        pedido.version
+      );
+      if (ok) {
+        notify(`Pedido #${pedido.numeroPedido} → ${nuevoEstado}`, 'green');
+      }
+    });
+  };
+
+  const handleConfirmarAcreditacion = async (pedido: Pedido): Promise<void> => {
     if (!esAdmin) {
       notify('Solo Administración puede confirmar acreditación de cheques.', 'amber');
       return;
     }
-    const hoy = getTodayISO();
-    const nota = `Cheque acreditado el ${formatShortDate(hoy)}`;
-    void handlePatchPedido(
-      pedido.id,
-      {
-        medioPago: 'Transferencia / Efectivo',
-        chequeAcreditado: true,
-        montoAbonado: pedido.totalFacturado,
-        montoCheque: 0,
-        observaciones: [pedido.observaciones, nota].filter(Boolean).join(' · ')
-      },
-      `Confirmó plata acreditada (${formatARS(pedido.totalFacturado)}) → Pagado`
-    ).then(() => {
-      notify(`Pedido #${pedido.numeroPedido} pasado a Pagado.`, 'green');
+    await withLock(`acreditar:${pedido.id}`, async () => {
+      const hoy = getTodayISO();
+      const nota = `Cheque acreditado el ${formatShortDate(hoy)}`;
+      const ok = await handlePatchPedido(
+        pedido.id,
+        {
+          medioPago: 'Transferencia / Efectivo',
+          chequeAcreditado: true,
+          montoAbonado: pedido.totalFacturado,
+          montoCheque: 0,
+          observaciones: [pedido.observaciones, nota].filter(Boolean).join(' · ')
+        },
+        `Confirmó plata acreditada (${formatARS(pedido.totalFacturado)}) → Pagado`,
+        pedido.version
+      );
+      if (ok) {
+        notify(`Pedido #${pedido.numeroPedido} pasado a Pagado.`, 'green');
+      }
     });
   };
 
-  const handleResolverEnDrawer = (pedido: Pedido, idLinea: string, cantidades: number[]): void => {
+  const handleResolverEnDrawer = async (
+    pedido: Pedido,
+    idLinea: string,
+    cantidades: number[]
+  ): Promise<boolean> => {
     const lineaObj = pedido.lineas.find((l) => l.idLinea === idLinea);
-    if (!lineaObj) return;
+    if (!lineaObj) return false;
     const resuelta = aplicarResolucionLinea(lineaObj, cantidades, catalogoCompleto);
     if (!resuelta) {
       notify(`La suma debe ser exactamente ${lineaObj.cantidadTotal} u.`, 'red');
-      return;
+      return false;
     }
     const nuevasLineas = pedido.lineas.map((l) => (l.idLinea === idLinea ? resuelta : l));
-    void handlePatchPedido(
-      pedido.id,
-      { lineas: nuevasLineas },
-      `Definió talle/color en ${lineaObj.nombreProducto} (${cantidades.join(' / ')})`
-    ).then(() => {
+    const ok = await withLock(`talles:${pedido.id}:${idLinea}`, () =>
+      handlePatchPedido(
+        pedido.id,
+        { lineas: nuevasLineas },
+        `Definió talle/color en ${lineaObj.nombreProducto} (${cantidades.join(' / ')})`,
+        pedido.version
+      )
+    );
+    if (ok) {
       notify(`${lineaObj.nombreProducto} confirmado para depósito.`, 'green');
-    });
+      return true;
+    }
+    return false;
   };
 
   const handleEnviarACuentas = async (params: {
@@ -624,7 +779,12 @@ export function ErpShell({
             'amber'
           );
         } else {
-          notify(`${res.enviados} pedido(s) enviados a la cuenta seleccionada.`, 'green');
+          notify(
+            res.enviados === 1
+              ? '1 pedido enviado a la cuenta seleccionada.'
+              : `${res.enviados} pedidos enviados a la cuenta seleccionada.`,
+            'green'
+          );
         }
       }
     } else if (!res.requiereConfirmacionSinPago && params.pedidoIds.length > 1) {
@@ -634,13 +794,15 @@ export function ErpShell({
   };
 
   const handleRetirarAsignacion = async (pedidoId: string, usuarioId: string): Promise<void> => {
-    const res = await retirarAsignacionAction({ pedidoId, usuarioId });
-    if (!res.ok) {
-      notify(res.error ?? 'No se pudo retirar la asignación.', 'red');
-      return;
-    }
-    await refrescarPedidosDesdeServidor();
-    notify('Asignación retirada.', 'neutral');
+    await withLock(`retirar:${pedidoId}:${usuarioId}`, async () => {
+      const res = await retirarAsignacionAction({ pedidoId, usuarioId });
+      if (!res.ok) {
+        notify(res.error ?? 'No se pudo retirar la asignación.', 'red');
+        return;
+      }
+      await refrescarPedidosDesdeServidor();
+      notify('Asignación retirada.', 'neutral');
+    });
   };
 
   const handleReportarIncidencia = async (pedidoId: string, mensaje: string): Promise<void> => {
@@ -655,14 +817,16 @@ export function ErpShell({
   };
 
   const handleResolverIncidencia = async (pedidoId: string): Promise<void> => {
-    const res = await resolverIncidenciaAction(pedidoId);
-    if (!res.ok || !res.data) {
-      notify(res.error ?? 'No se pudo marcar como resuelto.', 'red');
-      return;
-    }
-    const updated = res.data;
-    setPedidos((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
-    notify('Aviso marcado como resuelto.', 'green');
+    await withLock(`resolverInc:${pedidoId}`, async () => {
+      const res = await resolverIncidenciaAction(pedidoId);
+      if (!res.ok || !res.data) {
+        notify(res.error ?? 'No se pudo marcar como resuelto.', 'red');
+        return;
+      }
+      const updated = res.data;
+      setPedidos((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
+      notify('Aviso marcado como resuelto.', 'green');
+    });
   };
 
   const handleToggleSelectAllVisible = (): void => {
@@ -713,7 +877,8 @@ export function ErpShell({
   const handleBatchArmado = (destino: 'En armado' | 'Listo'): void => {
     const ids = pedidosSeleccionados.map((p) => p.id);
     setBatchPanel(null);
-    void batchPedidosAction({ ids, action: { type: 'armado', estadoArmado: destino } }).then(async (res) => {
+    void withLock('batch:armado', async () => {
+      const res = await batchPedidosAction({ ids, action: { type: 'armado', estadoArmado: destino } });
       if (!res.ok || !res.data) {
         notify(res.error ?? 'Error al actualizar lote.', 'red');
         return;
@@ -722,7 +887,7 @@ export function ErpShell({
       const { actualizados, omitidos } = res.data;
       if (omitidos.length > 0 && actualizados > 0) {
         notify(
-          `${actualizados} pasados a Listo · ${omitidos.length} bloqueados por falta de talle (${omitidos.join(', ')})`,
+          `${actualizados} pasados a Listo · ${omitidos.length} omitido(s) por falta de talle (${omitidos.join(', ')})`,
           'amber'
         );
       } else if (omitidos.length > 0 && actualizados === 0) {
@@ -737,21 +902,32 @@ export function ErpShell({
     const ids = pedidosSeleccionados.map((p) => p.id);
     const transp = transporte.trim();
     setBatchPanel(null);
-    void batchPedidosAction({
-      ids,
-      action: { type: 'envio', estadoEnvio: destino, ...(transp ? { transporte: transp } : {}) }
-    }).then(async (res) => {
+    void withLock('batch:envio', async () => {
+      const res = await batchPedidosAction({
+        ids,
+        action: { type: 'envio', estadoEnvio: destino, ...(transp ? { transporte: transp } : {}) }
+      });
       if (!res.ok || !res.data) {
         notify(res.error ?? 'Error al actualizar envíos.', 'red');
         return;
       }
       await refrescarPedidosDesdeServidor();
-      notify(
-        transp
-          ? `${res.data.actualizados} pedidos marcados como ${destino} (${transp})`
-          : `${res.data.actualizados} pedidos marcados como ${destino}`,
-        'green'
-      );
+      const { actualizados, omitidos } = res.data;
+      if (omitidos.length > 0) {
+        notify(
+          actualizados > 0
+            ? `${actualizados} marcados como ${destino} · ${omitidos.length} omitido(s) por falta de talle`
+            : `No se pudo despachar: falta talle en ${omitidos.join(', ')}`,
+          actualizados > 0 ? 'amber' : 'red'
+        );
+      } else {
+        notify(
+          transp
+            ? `${actualizados} ${actualizados === 1 ? 'pedido marcado' : 'pedidos marcados'} como ${destino} (${transp})`
+            : `${actualizados} ${actualizados === 1 ? 'pedido marcado' : 'pedidos marcados'} como ${destino}`,
+          'green'
+        );
+      }
     });
   };
 
@@ -762,7 +938,8 @@ export function ErpShell({
     }
     const ids = pedidosSeleccionados.map((p) => p.id);
     setBatchPanel(null);
-    void batchPedidosAction({ ids, action: { type: 'pago', estado: accion } }).then(async (res) => {
+    void withLock('batch:pago', async () => {
+      const res = await batchPedidosAction({ ids, action: { type: 'pago', estado: accion } });
       if (!res.ok || !res.data) {
         notify(res.error ?? 'Error al actualizar pagos.', 'red');
         return;
@@ -782,13 +959,17 @@ export function ErpShell({
     }
     const ids = pedidosSeleccionados.map((p) => p.id);
     setBatchPanel(null);
-    void batchPedidosAction({ ids, action: { type: 'vendedor', vendedor } }).then(async (res) => {
+    void withLock('batch:vendedor', async () => {
+      const res = await batchPedidosAction({ ids, action: { type: 'vendedor', vendedor } });
       if (!res.ok || !res.data) {
         notify(res.error ?? 'Error al asignar vendedor.', 'red');
         return;
       }
       await refrescarPedidosDesdeServidor();
-      notify(`${res.data.actualizados} pedidos asignados a ${vendedor}`, 'green');
+      notify(
+        `${res.data.actualizados} ${res.data.actualizados === 1 ? 'pedido asignado' : 'pedidos asignados'} a ${vendedor}`,
+        'green'
+      );
     });
   };
 
@@ -797,7 +978,8 @@ export function ErpShell({
       notify('Solo Administración puede eliminar pedidos.', 'amber');
       return;
     }
-    void softDeletePedidosAction({ ids: [pedido.id] }).then(async (res) => {
+    void withLock(`eliminar:${pedido.id}`, async () => {
+      const res = await softDeletePedidosAction({ ids: [pedido.id] });
       if (!res.ok) {
         notify(res.error ?? 'No se pudo eliminar.', 'red');
         return;
@@ -887,6 +1069,7 @@ export function ErpShell({
     detalleCheque: string;
     lineas: LineaPedido[];
   }): Promise<void> => {
+    if (guardandoPedido) return;
     setGuardandoPedido(true);
     try {
       const res = await crearPedidoAction(payload);
@@ -936,15 +1119,17 @@ export function ErpShell({
     );
   };
 
-  const handleExportarHojaDeposito = async (pedido: Pedido): Promise<void> => {
-    const res = await fetch(`/api/export/deposito/${encodeURIComponent(pedido.id)}`);
-    if (!res.ok) {
-      const body = (await res.json().catch(() => ({}))) as { error?: string };
-      notify(body.error ?? 'No se pudo exportar este pedido.', 'red');
-      return;
-    }
-    await descargarResponseBlob(res, `Mibi_Deposito_Pedido_${pedido.numeroPedido}.xlsx`);
-    notify(`Descargada Hoja depósito #${pedido.numeroPedido}`, 'green');
+  const handleExportarHojaDeposito = (pedido: Pedido): void => {
+    void withLock(`hoja:${pedido.id}`, async () => {
+      const res = await fetch(`/api/export/deposito/${encodeURIComponent(pedido.id)}`);
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        notify(body.error ?? 'No se pudo exportar este pedido.', 'red');
+        return;
+      }
+      await descargarResponseBlob(res, `Mibi_Deposito_Pedido_${pedido.numeroPedido}.xlsx`);
+      notify(`Descargada Hoja depósito #${pedido.numeroPedido}`, 'green');
+    });
   };
 
   const handleExportarTablero = async (ids?: string[]): Promise<void> => {
@@ -1003,17 +1188,12 @@ export function ErpShell({
     );
   };
 
-  const handleReiniciarSistema = async (): Promise<void> => {
-    if (!esAdmin) return;
-    if (!confirmReiniciar) {
-      setConfirmReiniciar(true);
-      window.setTimeout(() => setConfirmReiniciar(false), 4000);
-      return;
-    }
+  const handleReiniciarSistema = async (): Promise<boolean> => {
+    if (!esAdmin) return false;
     const res = await reiniciarSistemaAction();
     if (!res.ok) {
       notify(res.error ?? 'No se pudo reiniciar el sistema.', 'red');
-      return;
+      return false;
     }
     limpiarSeleccion();
     setPedidos([]);
@@ -1023,45 +1203,49 @@ export function ErpShell({
     setCantidadesManuales({});
     setNombreArchivoCargado('');
     setForm(crearFormInicial());
-    setConfirmReiniciar(false);
     setVista('pedidos');
     notify('Sistema reiniciado en cero.', 'neutral');
+    return true;
   };
 
-  const filtrosPildora: ReadonlyArray<{ id: FiltroPedidos; label: string; count: number }> = esDeposito
-    ? [
-        { id: 'todos', label: 'Todos', count: conteosFiltro.todos },
-        { id: 'urgentes', label: 'Urgentes', count: conteosFiltro.urgentes },
-        { id: 'por_armar', label: 'Por armar', count: conteosFiltro.por_armar },
-        { id: 'en_armado', label: 'En armado', count: conteosFiltro.en_armado },
-        { id: 'listos', label: 'Listos', count: conteosFiltro.listos },
-        { id: 'despachados', label: 'Despachados', count: conteosFiltro.despachados }
-      ]
-    : [
-        { id: 'todos', label: 'Todos', count: conteosFiltro.todos },
-        { id: 'falta_talle', label: 'Falta talle', count: conteosFiltro.falta_talle },
-        { id: 'cheques', label: 'Cheques', count: conteosFiltro.cheques },
-        { id: 'falta_pago', label: 'Falta pago', count: conteosFiltro.falta_pago },
-        { id: 'listos', label: 'Listos', count: conteosFiltro.listos },
-        ...(esAdmin
-          ? [
-              {
-                id: 'sin_enviar_deposito' as const,
-                label: 'Sin enviar a depósito',
-                count: conteosFiltro.sin_enviar_deposito
-              }
-            ]
-          : []),
-        ...(esAdmin && conteosFiltro.con_aviso_deposito > 0
-          ? [
-              {
-                id: 'con_aviso_deposito' as const,
-                label: 'Con aviso de depósito',
-                count: conteosFiltro.con_aviso_deposito
-              }
-            ]
-          : [])
-      ];
+  const filtrosPildora: ReadonlyArray<{ id: FiltroPedidos; label: string; count: number; excepcion?: boolean }> =
+    esDeposito
+      ? [
+          { id: 'todos', label: 'Todos', count: conteosFiltro.todos },
+          { id: 'urgentes', label: 'Urgentes', count: conteosFiltro.urgentes, excepcion: true },
+          { id: 'por_armar', label: 'Por armar', count: conteosFiltro.por_armar },
+          { id: 'en_armado', label: 'En armado', count: conteosFiltro.en_armado },
+          { id: 'listos', label: 'Listos', count: conteosFiltro.listos },
+          { id: 'despachados', label: 'Despachados', count: conteosFiltro.despachados }
+        ]
+      : [
+          { id: 'todos', label: 'Todos', count: conteosFiltro.todos },
+          { id: 'falta_talle', label: 'Falta talle', count: conteosFiltro.falta_talle, excepcion: true },
+          { id: 'cheques', label: 'Cheques', count: conteosFiltro.cheques, excepcion: true },
+          { id: 'falta_pago', label: 'Falta pago', count: conteosFiltro.falta_pago },
+          { id: 'listos', label: 'Listos', count: conteosFiltro.listos },
+          ...(esAdmin
+            ? [
+                {
+                  id: 'sin_enviar_deposito' as const,
+                  label: 'Sin enviar a depósito',
+                  count: conteosFiltro.sin_enviar_deposito,
+                  excepcion: true
+                },
+                {
+                  id: 'con_aviso_deposito' as const,
+                  label: 'Con aviso de depósito',
+                  count: conteosFiltro.con_aviso_deposito,
+                  excepcion: true
+                }
+              ]
+            : [])
+        ];
+
+  const filtrosVisibles = filtrosPildora.filter(
+    (item) => !item.excepcion || item.count > 0 || filtro === item.id
+  );
+  const hayFiltrosActivos = filtro !== 'todos' || busqueda.trim().length > 0;
 
   return (
     <div className="min-h-screen bg-[#FAFAFA] text-[#111111] dark:bg-[#0B0B0D] dark:text-[#F4F4F5] flex flex-col">
@@ -1100,6 +1284,24 @@ export function ErpShell({
         </div>
       )}
 
+      {conflictoVersion && (
+        <div className="bg-amber-50 border-b border-amber-200 dark:bg-amber-500/10 dark:border-amber-500/25 px-4 py-2 text-xs">
+          <div className="max-w-7xl mx-auto flex items-center justify-between gap-3">
+            <span className="text-amber-900 dark:text-amber-200 font-medium">
+              Hay cambios recientes guardados desde otro dispositivo. Actualizá antes de editar para no pisarlos.
+            </span>
+            <button
+              type="button"
+              onClick={() => void refrescarPedidosDesdeServidor()}
+              className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white border border-amber-300 text-amber-900 hover:bg-amber-100 dark:bg-[#1B1B1F] dark:border-amber-500/35 dark:text-amber-200 font-semibold"
+            >
+              <RefreshCw className="w-3 h-3" strokeWidth={1.75} />
+              Actualizar ahora
+            </button>
+          </div>
+        </div>
+      )}
+
       {pendingUndoDelete && (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50">
           <div className="flex items-center gap-3 pl-4 pr-2 py-2 rounded-full bg-zinc-900 dark:bg-[#1C1C22] text-white text-xs font-medium shadow-lg dark:shadow-[0_12px_36px_rgba(0,0,0,0.55)] border border-zinc-800 dark:border-[#34343D]">
@@ -1127,10 +1329,16 @@ export function ErpShell({
             <div className="inline-flex items-center">
               <MibiLogo width={64} variant="pink" />
             </div>
-            <span className="hidden md:inline-flex items-center gap-1.5 text-[11px] text-zinc-400 dark:text-zinc-500">
-              <span className={`w-1.5 h-1.5 rounded-full ${isLocalDev ? 'bg-amber-400' : 'bg-emerald-500'}`} />
-              {isLocalDev ? 'Entorno Local' : 'Nube privada'}
-            </span>
+            {esDeposito ? (
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-zinc-100 text-zinc-700 border border-zinc-200/80 dark:bg-[#1B1B1F] dark:text-zinc-300 dark:border-[#26262B]">
+                Producción y Depósito
+              </span>
+            ) : (
+              <span className="hidden md:inline-flex items-center gap-1.5 text-[11px] text-zinc-400 dark:text-zinc-500">
+                <span className={`w-1.5 h-1.5 rounded-full ${isLocalDev ? 'bg-amber-400' : 'bg-emerald-500'}`} />
+                {isLocalDev ? 'Entorno Local' : 'Nube privada'}
+              </span>
+            )}
           </div>
 
           {!esDeposito && (
@@ -1161,85 +1369,120 @@ export function ErpShell({
             </nav>
           )}
 
-          <div className="flex items-center gap-2">
+          <div ref={headerMenusRef} className="flex items-center gap-2 relative">
             {!esDeposito && (
-              <button
-                type="button"
-                onClick={() => setModalCatalogoAbierto(true)}
-                className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-white border border-zinc-200 text-zinc-700 hover:bg-zinc-50 dark:bg-[#1B1B1F] dark:border-[#2E2E35] dark:text-zinc-200 dark:hover:bg-[#24242B] transition-colors"
-                title="Productos fuera de planilla"
-              >
-                <BookOpen className="w-3.5 h-3.5" strokeWidth={1.5} />
-                Catálogo
-              </button>
-            )}
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setMenuAbierto((prev) => (prev === 'herramientas' ? null : 'herramientas'))}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-white border border-zinc-200 text-zinc-700 hover:bg-zinc-50 dark:bg-[#1B1B1F] dark:border-[#2E2E35] dark:text-zinc-200 dark:hover:bg-[#24242B] transition-colors"
+                >
+                  <BookOpen className="w-3.5 h-3.5" strokeWidth={1.5} />
+                  <span className="hidden sm:inline">Planillas y Catálogo</span>
+                  <ChevronDown className="w-3 h-3 text-zinc-400" strokeWidth={1.5} />
+                </button>
 
-            {esAdmin && pedidos.length > 0 && (
-              <button
-                type="button"
-                onClick={() => void handleExportarTablero()}
-                className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-white border border-zinc-200 text-zinc-700 hover:bg-zinc-50 dark:bg-[#1B1B1F] dark:border-[#2E2E35] dark:text-zinc-200 dark:hover:bg-[#24242B] transition-colors"
-              >
-                <Download className="w-3.5 h-3.5" strokeWidth={1.5} />
-                Exportar Excel
-              </button>
-            )}
+                {menuAbierto === 'herramientas' && (
+                  <div className="absolute right-0 mt-2 w-64 bg-white dark:bg-[#18181D] rounded-2xl border border-[#EAEAEA] dark:border-[#2E2E36] shadow-[0_12px_36px_rgba(0,0,0,0.12)] dark:shadow-[0_12px_36px_rgba(0,0,0,0.55)] p-1.5 z-40 text-xs">
+                    {esAdmin && pedidos.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setMenuAbierto(null);
+                          void handleExportarTablero();
+                        }}
+                        className="w-full text-left px-3 py-2 rounded-xl flex items-center gap-2.5 text-[#111111] dark:text-[#F4F4F5] hover:bg-zinc-100 dark:hover:bg-[#24242B] transition-colors"
+                      >
+                        <Download className="w-3.5 h-3.5 text-zinc-500 dark:text-zinc-400" strokeWidth={1.5} />
+                        <span>Exportar Tablero Maestro (.xlsx)</span>
+                      </button>
+                    )}
 
-            {esAdmin && (
-              <button
-                type="button"
-                onClick={() => fileInputGeneralRef.current?.click()}
-                className="hidden lg:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-white border border-zinc-200 text-zinc-700 hover:bg-zinc-50 dark:bg-[#1B1B1F] dark:border-[#2E2E35] dark:text-zinc-200 dark:hover:bg-[#24242B] transition-colors"
-                title="Importar planilla general previa PEDIDOS MAYORISTA MIBI.xlsx"
-              >
-                <Upload className="w-3.5 h-3.5" strokeWidth={1.5} />
-                Importar planilla
-              </button>
-            )}
+                    {esAdmin && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setMenuAbierto(null);
+                          fileInputGeneralRef.current?.click();
+                        }}
+                        className="w-full text-left px-3 py-2 rounded-xl flex items-center gap-2.5 text-[#111111] dark:text-[#F4F4F5] hover:bg-zinc-100 dark:hover:bg-[#24242B] transition-colors"
+                      >
+                        <Upload className="w-3.5 h-3.5 text-zinc-500 dark:text-zinc-400" strokeWidth={1.5} />
+                        <span>Importar planilla previa (.xlsx)</span>
+                      </button>
+                    )}
 
-            {esAdmin && pedidos.length > 0 && (
-              <button
-                type="button"
-                onClick={() => void handleReiniciarSistema()}
-                className={`hidden sm:inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${
-                  confirmReiniciar
-                    ? 'bg-red-600 text-white border-red-600'
-                    : 'bg-white text-zinc-500 border-zinc-200 hover:text-red-700 hover:border-red-200 dark:bg-[#1B1B1F] dark:text-zinc-400 dark:border-[#2E2E35] dark:hover:text-red-400 dark:hover:border-red-500/40'
-                }`}
-              >
-                <RotateCcw className="w-3.5 h-3.5" strokeWidth={1.5} />
-                {confirmReiniciar ? 'Confirmar reinicio' : 'Reiniciar'}
-              </button>
-            )}
-
-            {esDeposito ? (
-              <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-zinc-50 border border-zinc-200/80 text-zinc-700 dark:bg-[#1B1B1F] dark:border-[#2E2E35] dark:text-zinc-200">
-                <Users className="w-3.5 h-3.5 text-zinc-500 dark:text-zinc-400" strokeWidth={1.5} />
-                <span>{session.nombre}</span>
-              </span>
-            ) : (
-              <button
-                type="button"
-                onClick={() => setModalEquipoAbierto(true)}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-zinc-50 border border-zinc-200/80 text-zinc-700 hover:bg-zinc-100 dark:bg-[#1B1B1F] dark:border-[#2E2E35] dark:text-zinc-200 dark:hover:bg-[#24242B] transition-colors"
-                title="Equipo y verificación técnica"
-              >
-                <Users className="w-3.5 h-3.5 text-zinc-500 dark:text-zinc-400" strokeWidth={1.5} />
-                <span className="hidden sm:inline">{session.nombre}</span>
-              </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMenuAbierto(null);
+                        setModalCatalogoAbierto(true);
+                      }}
+                      className="w-full text-left px-3 py-2 rounded-xl flex items-center gap-2.5 text-[#111111] dark:text-[#F4F4F5] hover:bg-zinc-100 dark:hover:bg-[#24242B] transition-colors"
+                    >
+                      <FileSpreadsheet className="w-3.5 h-3.5 text-zinc-500 dark:text-zinc-400" strokeWidth={1.5} />
+                      <span>
+                        {esAdmin ? 'Gestionar catálogo (Pilusos y otros)' : 'Ver / agregar productos al catálogo'}
+                      </span>
+                    </button>
+                  </div>
+                )}
+              </div>
             )}
 
             <ThemeToggle />
 
-            <button
-              type="button"
-              onClick={() => void logoutAction()}
-              className="p-1.5 rounded-full text-zinc-400 hover:text-zinc-800 hover:bg-zinc-100 dark:hover:text-[#F4F4F5] dark:hover:bg-[#1B1B1F] transition-colors"
-              title="Bloquear sesión"
-              aria-label="Bloquear sesión"
-            >
-              <LogOut className="w-4 h-4" strokeWidth={1.5} />
-            </button>
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setMenuAbierto((prev) => (prev === 'cuenta' ? null : 'cuenta'))}
+                className="inline-flex items-center gap-2 pl-1.5 pr-2.5 py-1 rounded-full text-xs font-medium bg-zinc-50 border border-zinc-200/80 text-zinc-700 hover:bg-zinc-100 dark:bg-[#1B1B1F] dark:border-[#2E2E35] dark:text-zinc-200 dark:hover:bg-[#24242B] transition-colors"
+                aria-label="Menú de cuenta"
+              >
+                <span className="w-5 h-5 rounded-full bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-950 text-[10px] font-semibold inline-flex items-center justify-center">
+                  {getInitials(session.nombre)}
+                </span>
+                <span className="hidden sm:inline">{session.nombre}</span>
+                <ChevronDown className="w-3 h-3 text-zinc-400" strokeWidth={1.5} />
+              </button>
+
+              {menuAbierto === 'cuenta' && (
+                <div className="absolute right-0 mt-2 w-56 bg-white dark:bg-[#18181D] rounded-2xl border border-[#EAEAEA] dark:border-[#2E2E36] shadow-[0_12px_36px_rgba(0,0,0,0.12)] dark:shadow-[0_12px_36px_rgba(0,0,0,0.55)] p-1.5 z-40 text-xs">
+                  <div className="px-3 py-2 border-b border-zinc-200/70 dark:border-[#26262B] mb-1">
+                    <div className="font-semibold text-[#111111] dark:text-[#F4F4F5]">{session.nombre}</div>
+                    <div className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                      @{session.username} · {rolUsuarioToLabel(session.rol)}
+                    </div>
+                  </div>
+
+                  {!esDeposito && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMenuAbierto(null);
+                        setModalEquipoAbierto(true);
+                      }}
+                      className="w-full text-left px-3 py-2 rounded-xl flex items-center gap-2.5 text-[#111111] dark:text-[#F4F4F5] hover:bg-zinc-100 dark:hover:bg-[#24242B] transition-colors"
+                    >
+                      <Users className="w-3.5 h-3.5 text-zinc-500 dark:text-zinc-400" strokeWidth={1.5} />
+                      <span>{esAdmin ? 'Equipo, claves y sistema' : 'Mi cuenta y equipo'}</span>
+                    </button>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMenuAbierto(null);
+                      void logoutAction();
+                    }}
+                    className="w-full text-left px-3 py-2 rounded-xl flex items-center gap-2.5 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10 transition-colors"
+                  >
+                    <LogOut className="w-3.5 h-3.5" strokeWidth={1.5} />
+                    <span>Cerrar sesión</span>
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </header>
@@ -1249,51 +1492,107 @@ export function ErpShell({
           <div className="space-y-6">
             {esDeposito ? (
               <section className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-                <div className="bg-white dark:bg-[#141417] rounded-2xl border border-[#EAEAEA] dark:border-[#26262B] shadow-[0_1px_2px_rgba(0,0,0,0.03)] px-5 py-4">
+                <button
+                  type="button"
+                  onClick={() => toggleKpiFiltro('por_armar')}
+                  className={`text-left cursor-pointer bg-white dark:bg-[#141417] rounded-2xl border px-5 py-4 shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition-all ${
+                    filtro === 'por_armar'
+                      ? 'border-zinc-900 dark:border-[#F4B6CE]/60 ring-1 ring-zinc-900/10 dark:ring-[#F4B6CE]/20'
+                      : 'border-[#EAEAEA] dark:border-[#26262B] hover:border-zinc-300 dark:hover:border-[#34343D]'
+                  }`}
+                >
                   <div className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Por armar</div>
                   <div className="mt-1.5 text-2xl font-semibold tracking-tight text-[#111111] dark:text-[#F4F4F5] tabular-nums">
                     {resumenDeposito.porArmar}
                   </div>
-                </div>
+                </button>
 
-                <div className="bg-white dark:bg-[#141417] rounded-2xl border border-[#EAEAEA] dark:border-[#26262B] shadow-[0_1px_2px_rgba(0,0,0,0.03)] px-5 py-4">
+                <button
+                  type="button"
+                  onClick={() => toggleKpiFiltro('urgentes')}
+                  className={`text-left cursor-pointer bg-white dark:bg-[#141417] rounded-2xl border px-5 py-4 shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition-all ${
+                    filtro === 'urgentes'
+                      ? 'border-zinc-900 dark:border-[#F4B6CE]/60 ring-1 ring-zinc-900/10 dark:ring-[#F4B6CE]/20'
+                      : 'border-[#EAEAEA] dark:border-[#26262B] hover:border-zinc-300 dark:hover:border-[#34343D]'
+                  }`}
+                >
                   <div className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Urgentes</div>
                   <div className="mt-1.5 text-2xl font-semibold tracking-tight text-red-700 dark:text-red-400 tabular-nums">
                     {resumenDeposito.urgentes}
                   </div>
-                </div>
+                </button>
 
-                <div className="bg-white dark:bg-[#141417] rounded-2xl border border-[#EAEAEA] dark:border-[#26262B] shadow-[0_1px_2px_rgba(0,0,0,0.03)] px-5 py-4">
+                <button
+                  type="button"
+                  onClick={() => toggleKpiFiltro('en_armado')}
+                  className={`text-left cursor-pointer bg-white dark:bg-[#141417] rounded-2xl border px-5 py-4 shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition-all ${
+                    filtro === 'en_armado'
+                      ? 'border-zinc-900 dark:border-[#F4B6CE]/60 ring-1 ring-zinc-900/10 dark:ring-[#F4B6CE]/20'
+                      : 'border-[#EAEAEA] dark:border-[#26262B] hover:border-zinc-300 dark:hover:border-[#34343D]'
+                  }`}
+                >
                   <div className="text-xs font-medium text-zinc-500 dark:text-zinc-400">En armado</div>
                   <div className="mt-1.5 text-2xl font-semibold tracking-tight text-[#111111] dark:text-[#F4F4F5] tabular-nums">
                     {resumenDeposito.enArmado}
                   </div>
-                </div>
+                </button>
 
-                <div className="bg-white dark:bg-[#141417] rounded-2xl border border-[#EAEAEA] dark:border-[#26262B] shadow-[0_1px_2px_rgba(0,0,0,0.03)] px-5 py-4">
+                <button
+                  type="button"
+                  onClick={() => toggleKpiFiltro('listos')}
+                  className={`text-left cursor-pointer bg-white dark:bg-[#141417] rounded-2xl border px-5 py-4 shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition-all ${
+                    filtro === 'listos'
+                      ? 'border-zinc-900 dark:border-[#F4B6CE]/60 ring-1 ring-zinc-900/10 dark:ring-[#F4B6CE]/20'
+                      : 'border-[#EAEAEA] dark:border-[#26262B] hover:border-zinc-300 dark:hover:border-[#34343D]'
+                  }`}
+                >
                   <div className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Listos para despachar</div>
                   <div className="mt-1.5 text-2xl font-semibold tracking-tight text-emerald-700 dark:text-emerald-400 tabular-nums">
                     {resumenDeposito.listosDespachar}
                   </div>
-                </div>
+                </button>
               </section>
             ) : (
               <section className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-                <div className="bg-white dark:bg-[#141417] rounded-2xl border border-[#EAEAEA] dark:border-[#26262B] shadow-[0_1px_2px_rgba(0,0,0,0.03)] px-5 py-4">
+                <button
+                  type="button"
+                  onClick={() => toggleKpiFiltro('pendientes_armado')}
+                  className={`text-left cursor-pointer bg-white dark:bg-[#141417] rounded-2xl border px-5 py-4 shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition-all ${
+                    filtro === 'pendientes_armado'
+                      ? 'border-zinc-900 dark:border-[#F4B6CE]/60 ring-1 ring-zinc-900/10 dark:ring-[#F4B6CE]/20'
+                      : 'border-[#EAEAEA] dark:border-[#26262B] hover:border-zinc-300 dark:hover:border-[#34343D]'
+                  }`}
+                >
                   <div className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Por armar</div>
                   <div className="mt-1.5 text-2xl font-semibold tracking-tight text-[#111111] dark:text-[#F4F4F5] tabular-nums">
                     {resumenFinanciero.porArmar}
                   </div>
-                </div>
+                </button>
 
-                <div className="bg-white dark:bg-[#141417] rounded-2xl border border-[#EAEAEA] dark:border-[#26262B] shadow-[0_1px_2px_rgba(0,0,0,0.03)] px-5 py-4">
+                <button
+                  type="button"
+                  onClick={() => toggleKpiFiltro('pagados')}
+                  className={`text-left cursor-pointer bg-white dark:bg-[#141417] rounded-2xl border px-5 py-4 shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition-all ${
+                    filtro === 'pagados'
+                      ? 'border-zinc-900 dark:border-[#F4B6CE]/60 ring-1 ring-zinc-900/10 dark:ring-[#F4B6CE]/20'
+                      : 'border-[#EAEAEA] dark:border-[#26262B] hover:border-zinc-300 dark:hover:border-[#34343D]'
+                  }`}
+                >
                   <div className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Cobrado en mano</div>
                   <div className="mt-1.5 text-2xl font-semibold tracking-tight text-emerald-700 dark:text-emerald-400 tabular-nums">
                     {formatARSCompacto(resumenFinanciero.cobradoEnMano)}
                   </div>
-                </div>
+                </button>
 
-                <div className="bg-white dark:bg-[#141417] rounded-2xl border border-[#EAEAEA] dark:border-[#26262B] shadow-[0_1px_2px_rgba(0,0,0,0.03)] px-5 py-4">
+                <button
+                  type="button"
+                  onClick={() => toggleKpiFiltro('cheques')}
+                  className={`text-left cursor-pointer bg-white dark:bg-[#141417] rounded-2xl border px-5 py-4 shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition-all ${
+                    filtro === 'cheques'
+                      ? 'border-zinc-900 dark:border-[#F4B6CE]/60 ring-1 ring-zinc-900/10 dark:ring-[#F4B6CE]/20'
+                      : 'border-[#EAEAEA] dark:border-[#26262B] hover:border-zinc-300 dark:hover:border-[#34343D]'
+                  }`}
+                >
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">En cheques 30d</span>
                     {resumenFinanciero.chequesPorVencer > 0 && (
@@ -1305,14 +1604,22 @@ export function ErpShell({
                   <div className="mt-1.5 text-2xl font-semibold tracking-tight text-amber-700 dark:text-amber-400 tabular-nums">
                     {formatARSCompacto(resumenFinanciero.enCheques)}
                   </div>
-                </div>
+                </button>
 
-                <div className="bg-white dark:bg-[#141417] rounded-2xl border border-[#EAEAEA] dark:border-[#26262B] shadow-[0_1px_2px_rgba(0,0,0,0.03)] px-5 py-4">
+                <button
+                  type="button"
+                  onClick={() => toggleKpiFiltro('falta_pago')}
+                  className={`text-left cursor-pointer bg-white dark:bg-[#141417] rounded-2xl border px-5 py-4 shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition-all ${
+                    filtro === 'falta_pago'
+                      ? 'border-zinc-900 dark:border-[#F4B6CE]/60 ring-1 ring-zinc-900/10 dark:ring-[#F4B6CE]/20'
+                      : 'border-[#EAEAEA] dark:border-[#26262B] hover:border-zinc-300 dark:hover:border-[#34343D]'
+                  }`}
+                >
                   <div className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Falta pago</div>
                   <div className="mt-1.5 text-2xl font-semibold tracking-tight text-[#111111] dark:text-[#F4F4F5] tabular-nums">
                     {formatARSCompacto(resumenFinanciero.faltaPago)}
                   </div>
-                </div>
+                </button>
               </section>
             )}
 
@@ -1395,7 +1702,7 @@ export function ErpShell({
                   </div>
 
                   <div className="flex flex-wrap items-center gap-1.5">
-                    {filtrosPildora.map((item) => {
+                    {filtrosVisibles.map((item) => {
                       const activo = filtro === item.id;
                       return (
                         <button
@@ -1419,17 +1726,6 @@ export function ErpShell({
                         </button>
                       );
                     })}
-
-                    {!esDeposito && (
-                      <button
-                        type="button"
-                        onClick={() => setVista('nuevo')}
-                        className="ml-1 inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs font-medium bg-zinc-900 hover:bg-zinc-800 text-white dark:bg-zinc-100 dark:hover:bg-white dark:text-zinc-950 transition-colors"
-                      >
-                        <Plus className="w-3.5 h-3.5" strokeWidth={1.75} />
-                        Nuevo pedido
-                      </button>
-                    )}
                   </div>
                 </div>
 
@@ -1440,11 +1736,18 @@ export function ErpShell({
                   seleccionParcialVisible={seleccionParcialVisible}
                   esAdmin={esAdmin}
                   esDeposito={esDeposito}
+                  hayFiltrosActivos={hayFiltrosActivos}
+                  pendingKeys={pendingKeys}
+                  onLimpiarFiltros={() => {
+                    setFiltro('todos');
+                    setBusqueda('');
+                  }}
                   onToggleSelectAll={handleToggleSelectAllVisible}
                   onToggleSelectRow={handleToggleSelectRow}
                   onOpenDrawer={handleOpenDrawer}
+                  onQuickArmado={handleQuickArmado}
                   onConfirmarAcreditacion={handleConfirmarAcreditacion}
-                  onExportarHojaDeposito={(p) => void handleExportarHojaDeposito(p)}
+                  onExportarHojaDeposito={handleExportarHojaDeposito}
                 />
               </section>
             )}
@@ -1456,6 +1759,7 @@ export function ErpShell({
             esAdmin={esAdmin}
             proximoNumeroPedido={proximoNumeroPedido}
             catalogoCompleto={catalogoCompleto}
+            clientesConocidos={clientesConocidos}
             form={form}
             setForm={setForm}
             lineasBorrador={lineasBorrador}
@@ -1490,6 +1794,7 @@ export function ErpShell({
           esAdmin={esAdmin}
           esDeposito={esDeposito}
           cuentasAsignables={cuentasAsignables}
+          transportesSugeridos={transportesConocidos}
           batchPanel={batchPanel}
           setBatchPanel={setBatchPanel}
           onLimpiarSeleccion={limpiarSeleccion}
@@ -1514,12 +1819,18 @@ export function ErpShell({
           esDeposito={esDeposito}
           catalogoCompleto={catalogoCompleto}
           cuentasAsignables={cuentasAsignables}
+          transportesSugeridos={transportesConocidos}
+          focusTarget={drawerFocusTarget}
+          pendingKeys={pendingKeys}
           copiadoId={copiadoId}
-          onClose={() => setDrawerPedidoId(null)}
+          onClose={() => {
+            setDrawerPedidoId(null);
+            setDrawerFocusTarget(null);
+          }}
           onPatch={handlePatchPedido}
           onConfirmarAcreditacion={handleConfirmarAcreditacion}
           onResolverLinea={handleResolverEnDrawer}
-          onExportarHojaDeposito={(p) => void handleExportarHojaDeposito(p)}
+          onExportarHojaDeposito={handleExportarHojaDeposito}
           onDuplicarComoNuevo={handleDuplicarComoNuevoPedido}
           onEliminarIndividual={handleEliminarIndividual}
           onEnviarACuentas={handleEnviarACuentas}
@@ -1537,6 +1848,7 @@ export function ErpShell({
           onClose={() => setModalEquipoAbierto(false)}
           onNotify={notify}
           onEquipoActualizado={refrescarCuentasDesdeServidor}
+          onReiniciarSistema={esAdmin ? handleReiniciarSistema : undefined}
         />
       )}
 

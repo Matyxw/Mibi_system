@@ -1,10 +1,12 @@
 'use client';
 
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useId, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   ArrowLeft,
   Check,
+  Copy,
+  Edit3,
   FileSpreadsheet,
   Lock,
   MessageCircle,
@@ -23,9 +25,10 @@ import {
   resolverLinea
 } from '@/lib/excel-parser';
 import { addDaysISO, formatARS, formatARSCompacto, fromCents, getTodayISO, round2, toCents } from '@/lib/finanzas';
-import { generarMensajeWhatsApp } from '@/lib/whatsapp';
+import { buildWhatsAppUrl, generarMensajeWhatsApp } from '@/lib/whatsapp';
 import type {
   AdvertenciaExcel,
+  ClienteConocido,
   DesgloseVariante,
   LineaPedido,
   MedioPago,
@@ -79,6 +82,7 @@ interface NuevoPedidoViewProps {
   esAdmin: boolean;
   proximoNumeroPedido: string;
   catalogoCompleto: ReadonlyArray<ProductoCatalogo>;
+  clientesConocidos: ReadonlyArray<ClienteConocido>;
   form: FormNuevoPedidoState;
   setForm: React.Dispatch<React.SetStateAction<FormNuevoPedidoState>>;
   lineasBorrador: LineaPedido[];
@@ -117,6 +121,7 @@ export function NuevoPedidoView({
   esAdmin,
   proximoNumeroPedido,
   catalogoCompleto,
+  clientesConocidos,
   form,
   setForm,
   lineasBorrador,
@@ -135,10 +140,15 @@ export function NuevoPedidoView({
   onProductoCustomCreado,
   onGuardar
 }: NuevoPedidoViewProps): React.JSX.Element {
+  const clientesListId = useId();
   const [modoCargaManual, setModoCargaManual] = useState<boolean>(false);
   const [busquedaCatalogo, setBusquedaCatalogo] = useState<string>('');
+  const [soloCargados, setSoloCargados] = useState<boolean>(false);
   const [arrastrandoArchivo, setArrastrandoArchivo] = useState<boolean>(false);
   const [resolucionesManual, setResolucionesManual] = useState<Record<string, string[]>>({});
+  const [editandoLineaId, setEditandoLineaId] = useState<string | null>(null);
+  const [confirmDescartar, setConfirmDescartar] = useState<boolean>(false);
+  const [confirmVaciarArticulos, setConfirmVaciarArticulos] = useState<boolean>(false);
   const fileInputListaRef = useRef<HTMLInputElement | null>(null);
 
   // Estado formulario "+ Producto fuera de planilla"
@@ -161,6 +171,12 @@ export function NuevoPedidoView({
     () => Array.from(new Set(['PILUSOS', ...catalogoCompleto.map((p) => p.rubro), 'ACCESORIOS'])),
     [catalogoCompleto]
   );
+
+  const clienteCoincidente = useMemo<ClienteConocido | null>(() => {
+    const q = form.cliente.trim().toLowerCase();
+    if (!q) return null;
+    return clientesConocidos.find((c) => c.cliente.toLowerCase() === q) ?? null;
+  }, [clientesConocidos, form.cliente]);
 
   const totalesBorrador = useMemo(() => {
     let subtotalCents = 0;
@@ -186,9 +202,15 @@ export function NuevoPedidoView({
     };
   }, [lineasBorrador, form.descuentoPorc]);
 
+  const cargadosManualCount = useMemo(
+    () => Object.values(cantidadesManuales).filter((q) => q > 0).length,
+    [cantidadesManuales]
+  );
+
   const catalogoFiltradoManual = useMemo(
     () =>
       catalogoCompleto.filter((prod) => {
+        if (soloCargados && (cantidadesManuales[prod.idGrupo] ?? 0) <= 0) return false;
         const q = normalizarTexto(busquedaCatalogo);
         if (!q) return true;
         return (
@@ -197,7 +219,7 @@ export function NuevoPedidoView({
           prod.variantes.some((v) => normalizarTexto(v.codigo).includes(q))
         );
       }),
-    [catalogoCompleto, busquedaCatalogo]
+    [catalogoCompleto, busquedaCatalogo, soloCargados, cantidadesManuales]
   );
 
   const sincronizarManualConBorrador = (nextMap: Record<string, number>): void => {
@@ -217,7 +239,6 @@ export function NuevoPedidoView({
           resultado.push(resolverLinea(prod, qty, existente?.notaCliente ?? ''));
         }
       }
-      // Conservar productos ad-hoc (no guardados en catálogo)
       for (const l of prev) {
         if (!catIds.has(l.idGrupo) && (nextMap[l.idGrupo] ?? l.cantidadTotal) > 0) {
           resultado.push(l);
@@ -245,6 +266,18 @@ export function NuevoPedidoView({
       delete next[idGrupo];
       return next;
     });
+  };
+
+  const handleDescartarBorrador = (): void => {
+    setForm(crearFormInicial());
+    setLineasBorrador([]);
+    setCantidadesManuales({});
+    setAdvertenciasExcel([]);
+    setNombreArchivoCargado('');
+    setSoloCargados(false);
+    setConfirmDescartar(false);
+    setConfirmVaciarArticulos(false);
+    onNotify('Borrador descartado.', 'neutral');
   };
 
   const handleArchivoLista006 = async (file: File): Promise<void> => {
@@ -292,16 +325,17 @@ export function NuevoPedidoView({
     onNotify('Planilla de ejemplo Lista N° 006 cargada ($3.560.673,05 total).', 'green');
   };
 
-  const handleResolverEnBorrador = (idLinea: string, cantidades: number[]): void => {
+  const handleResolverEnBorrador = (idLinea: string, cantidades: number[]): boolean => {
     const lineaObj = lineasBorrador.find((l) => l.idLinea === idLinea);
-    if (!lineaObj) return;
+    if (!lineaObj) return false;
     const resuelta = aplicarResolucionLinea(lineaObj, cantidades, catalogoCompleto);
     if (!resuelta) {
       onNotify(`La suma debe ser exactamente ${lineaObj.cantidadTotal} u.`, 'red');
-      return;
+      return false;
     }
     setLineasBorrador((prev) => prev.map((l) => (l.idLinea === idLinea ? resuelta : l)));
     onNotify(`${lineaObj.nombreProducto} confirmado.`, 'green');
+    return true;
   };
 
   const resetFueraPlanilla = (): void => {
@@ -321,6 +355,7 @@ export function NuevoPedidoView({
 
   const handleAgregarFueraPlanilla = async (e: React.FormEvent<HTMLFormElement>): Promise<void> => {
     e.preventDefault();
+    if (fpGuardando) return;
     const nombre = fpNombre.trim();
     const rubro = (fpRubroSel === '__OTRO__' ? fpRubroCustom : fpRubroSel).trim().toUpperCase();
     const precioNeto = round2(parseFloat(fpPrecioNeto.replace(',', '.')) || 0);
@@ -438,7 +473,162 @@ export function NuevoPedidoView({
     );
   };
 
+  const renderVariantResolverBorrador = (l: LineaPedido, mode: 'pendiente' | 'edicion'): React.JSX.Element | null => {
+    const prod = catalogoCompleto.find((p) => p.idGrupo === l.idGrupo);
+    const variantes = prod ? prod.variantes : l.desglose;
+    if (variantes.length < 2) return null;
+
+    const key = mode === 'pendiente' ? `borr_${l.idLinea}` : `borr_ed_${l.idLinea}`;
+    const defaultArr =
+      mode === 'edicion'
+        ? variantes.map((v) => String(l.desglose.find((d) => d.codigo === v.codigo)?.cantidad ?? 0))
+        : variantes.map(() => '0');
+    const cur = resolucionesManual[key] ?? defaultArr;
+    const nums = variantes.map((_, idx) => Math.max(0, parseInt(cur[idx] ?? '0', 10) || 0));
+    const suma = nums.reduce((acc, q) => acc + q, 0);
+    const diff = l.cantidadTotal - suma;
+    const esDos = variantes.length === 2;
+
+    const setArr = (nextArr: string[]): void => {
+      setResolucionesManual((prev) => ({ ...prev, [key]: nextArr }));
+    };
+
+    const confirmar = (): void => {
+      const ok = handleResolverEnBorrador(l.idLinea, nums);
+      if (ok && mode === 'edicion') setEditandoLineaId(null);
+    };
+
+    const handleInput = (vIdx: number, raw: string): void => {
+      if (esDos) {
+        const cleaned = raw === '' ? 0 : Math.max(0, Math.min(l.cantidadTotal, parseInt(raw, 10) || 0));
+        const other = Math.max(0, l.cantidadTotal - cleaned);
+        if (vIdx === 0) {
+          setArr([raw === '' ? '0' : String(cleaned), String(other)]);
+        } else {
+          setArr([String(other), raw === '' ? '0' : String(cleaned)]);
+        }
+        return;
+      }
+      setArr(variantes.map((_, idx) => (idx === vIdx ? raw : (cur[idx] ?? '0'))));
+    };
+
+    return (
+      <div
+        key={l.idLinea}
+        className={`rounded-xl border p-3.5 space-y-2.5 ${
+          mode === 'pendiente'
+            ? 'bg-white dark:bg-[#1B1B1F] border-red-200/70 dark:border-red-500/25'
+            : 'bg-[#FAFAFA] dark:bg-[#1B1B1F] border-zinc-200 dark:border-[#2E2E35]'
+        }`}
+      >
+        <div className="flex items-center justify-between text-xs">
+          <span className="font-semibold text-[#111111] dark:text-[#F4F4F5]">{l.nombreProducto}</span>
+          <span
+            className={`font-semibold tabular-nums ${
+              mode === 'pendiente' ? 'text-red-700 dark:text-red-300' : 'text-zinc-600 dark:text-zinc-300'
+            }`}
+          >
+            Total: {l.cantidadTotal} u.
+          </span>
+        </div>
+        {mode === 'pendiente' && l.motivoRevision && (
+          <p className="text-[11px] text-red-600 dark:text-red-400">{l.motivoRevision}</p>
+        )}
+
+        {esDos && (
+          <div className="flex flex-wrap items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => setArr([String(l.cantidadTotal), '0'])}
+              className="px-2.5 py-1 rounded-full text-[11px] font-medium bg-zinc-100 hover:bg-zinc-200/80 text-zinc-700 dark:bg-[#141417] dark:hover:bg-[#24242B] dark:text-zinc-300 border border-zinc-200/70 dark:border-[#2E2E35]"
+            >
+              Todo {variantes[0]?.etiqueta}
+            </button>
+            {l.cantidadTotal % 2 === 0 && (
+              <button
+                type="button"
+                onClick={() => setArr([String(l.cantidadTotal / 2), String(l.cantidadTotal / 2)])}
+                className="px-2.5 py-1 rounded-full text-[11px] font-medium bg-zinc-100 hover:bg-zinc-200/80 text-zinc-700 dark:bg-[#141417] dark:hover:bg-[#24242B] dark:text-zinc-300 border border-zinc-200/70 dark:border-[#2E2E35]"
+              >
+                Mitad y mitad
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setArr(['0', String(l.cantidadTotal)])}
+              className="px-2.5 py-1 rounded-full text-[11px] font-medium bg-zinc-100 hover:bg-zinc-200/80 text-zinc-700 dark:bg-[#141417] dark:hover:bg-[#24242B] dark:text-zinc-300 border border-zinc-200/70 dark:border-[#2E2E35]"
+            >
+              Todo {variantes[1]?.etiqueta}
+            </button>
+          </div>
+        )}
+
+        <div className="flex flex-wrap items-end gap-2">
+          {variantes.map((v, vIdx) => (
+            <div key={v.codigo} className="flex-1 min-w-[110px]">
+              <label className="block text-[11px] text-zinc-500 dark:text-zinc-400 mb-1">
+                {v.etiqueta} ({v.codigo})
+              </label>
+              <input
+                type="number"
+                min={0}
+                max={l.cantidadTotal}
+                value={cur[vIdx] ?? '0'}
+                onWheel={(e) => e.currentTarget.blur()}
+                onChange={(e) => handleInput(vIdx, e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    confirmar();
+                  }
+                }}
+                className="w-full px-2.5 py-1.5 text-xs bg-white dark:bg-[#141417] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-lg tabular-nums"
+              />
+            </div>
+          ))}
+          <div className="flex items-center gap-1.5">
+            {mode === 'edicion' && (
+              <button
+                type="button"
+                onClick={() => setEditandoLineaId(null)}
+                className="px-3 py-1.5 rounded-full text-xs border border-zinc-200 dark:border-[#2E2E35] text-zinc-600 dark:text-zinc-300"
+              >
+                Cancelar
+              </button>
+            )}
+            <button
+              type="button"
+              disabled={suma !== l.cantidadTotal}
+              onClick={confirmar}
+              className="px-3.5 py-1.5 rounded-full text-xs font-medium bg-zinc-900 hover:bg-zinc-800 text-white dark:bg-zinc-100 dark:hover:bg-white dark:text-zinc-950 disabled:opacity-40"
+            >
+              Confirmar
+            </button>
+          </div>
+        </div>
+
+        {!esDos && (
+          <div className="text-[11px] tabular-nums">
+            <span
+              className={
+                diff === 0
+                  ? 'text-emerald-700 dark:text-emerald-400 font-medium'
+                  : diff > 0
+                    ? 'text-amber-700 dark:text-amber-400 font-medium'
+                    : 'text-red-600 dark:text-red-400 font-medium'
+              }
+            >
+              Asignadas: {suma} / {l.cantidadTotal}
+              {diff > 0 ? ` · Faltan ${diff}` : diff < 0 ? ` · Sobran ${Math.abs(diff)}` : ' ✓'}
+            </span>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   const handleSubmit = async (): Promise<void> => {
+    if (guardandoPedido) return;
     if (!form.cliente.trim()) {
       onNotify('Ingresá el nombre del cliente o negocio.', 'amber');
       return;
@@ -497,8 +687,30 @@ export function NuevoPedidoView({
   const fpPrecioNum = round2(parseFloat(fpPrecioNeto.replace(',', '.')) || 0);
   const fpPrecioConIva = round2(fpPrecioNum * 1.21);
 
+  const hayDatosEnBorrador =
+    lineasBorrador.length > 0 || form.cliente.trim().length > 0 || form.observaciones.trim().length > 0;
+
+  const faltantesParaGuardar: string[] = [];
+  if (!form.cliente.trim()) faltantesParaGuardar.push('Falta nombre del cliente');
+  if (lineasBorrador.length === 0) faltantesParaGuardar.push('Cargá al menos 1 artículo');
+  if (advertenciasExcel.length > 0) faltantesParaGuardar.push('Revisá las alertas del Excel');
+
+  const msgReclamoBorrador = generarMensajeWhatsApp(
+    form.cliente.trim(),
+    proximoNumeroPedido,
+    lineasBorrador,
+    catalogoCompleto
+  );
+  const waUrlBorrador = buildWhatsAppUrl(form.whatsapp, msgReclamoBorrador);
+
   return (
     <div className="max-w-2xl mx-auto space-y-6">
+      <datalist id={clientesListId}>
+        {clientesConocidos.map((c) => (
+          <option key={c.cliente} value={c.cliente} />
+        ))}
+      </datalist>
+
       <input
         ref={fileInputListaRef}
         type="file"
@@ -511,7 +723,7 @@ export function NuevoPedidoView({
         }}
       />
 
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2.5">
           <button
             type="button"
@@ -528,15 +740,64 @@ export function NuevoPedidoView({
             <p className="text-xs text-zinc-500 dark:text-zinc-400">Cargá el Excel Lista N° 006 o ingresá cantidades a mano.</p>
           </div>
         </div>
+
+        {hayDatosEnBorrador && (
+          confirmDescartar ? (
+            <div className="inline-flex items-center gap-1.5 text-xs bg-red-50 border border-red-200 dark:bg-red-500/10 dark:border-red-500/25 rounded-full px-3 py-1">
+              <span className="text-red-800 dark:text-red-200 font-medium">¿Descartar borrador?</span>
+              <button
+                type="button"
+                onClick={handleDescartarBorrador}
+                className="px-2 py-0.5 rounded-full bg-red-600 text-white font-semibold"
+              >
+                Sí
+              </button>
+              <button
+                type="button"
+                onClick={() => setConfirmDescartar(false)}
+                className="px-1.5 py-0.5 text-zinc-600 dark:text-zinc-300"
+              >
+                No
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setConfirmDescartar(true)}
+              className="text-xs text-zinc-400 hover:text-red-600 dark:text-zinc-500 dark:hover:text-red-400 transition-colors"
+            >
+              Descartar borrador
+            </button>
+          )
+        )}
       </div>
 
       <section className="bg-white dark:bg-[#141417] rounded-2xl border border-[#EAEAEA] dark:border-[#26262B] shadow-[0_1px_2px_rgba(0,0,0,0.03)] p-6 space-y-4">
         <h2 className="text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">1. Datos del pedido</h2>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <div className="sm:col-span-2">
-            <label className="block text-xs font-medium text-zinc-600 dark:text-zinc-300 mb-1.5">Cliente o negocio *</label>
+          <div className="sm:col-span-2 space-y-1.5">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <label className="block text-xs font-medium text-zinc-600 dark:text-zinc-300">Cliente o negocio *</label>
+              {clienteCoincidente && !form.whatsapp.trim() && (clienteCoincidente.whatsapp || clienteCoincidente.vendedor) && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setForm((prev) => ({
+                      ...prev,
+                      vendedor: clienteCoincidente.vendedor || prev.vendedor,
+                      whatsapp: clienteCoincidente.whatsapp || prev.whatsapp
+                    }));
+                    onNotify(`Completados vendedor y WhatsApp de ${clienteCoincidente.cliente}.`, 'green');
+                  }}
+                  className="text-[11px] font-medium px-2.5 py-0.5 rounded-full bg-[#FCE7F3] text-[#111111] border border-[#F4B8D1] dark:bg-[#F4B6CE]/15 dark:text-[#FCE7F3] dark:border-[#F4B6CE]/30"
+                >
+                  Usar datos anteriores (vendedor y WhatsApp)
+                </button>
+              )}
+            </div>
             <input
               type="text"
+              list={clientesListId}
               value={form.cliente}
               onChange={(e) => setForm((prev) => ({ ...prev, cliente: e.target.value }))}
               placeholder="Ej. Casa Lorenzo, Pañalera Nuevo Mundo..."
@@ -599,6 +860,7 @@ export function NuevoPedidoView({
               step="0.5"
               disabled={!esAdmin}
               value={esAdmin ? form.descuentoPorc : 0}
+              onWheel={(e) => e.currentTarget.blur()}
               onChange={(e) =>
                 setForm((prev) => ({
                   ...prev,
@@ -770,13 +1032,28 @@ export function NuevoPedidoView({
           </div>
         ) : (
           <div className="space-y-3">
-            <input
-              type="text"
-              value={busquedaCatalogo}
-              onChange={(e) => setBusquedaCatalogo(e.target.value)}
-              placeholder="Filtrar catálogo por nombre, código o rubro..."
-              className="w-full px-3.5 py-2 text-sm bg-white dark:bg-[#1B1B1F] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-xl placeholder:text-zinc-400 dark:placeholder:text-zinc-500 focus:outline-none focus:border-zinc-900 dark:focus:border-[#F4B6CE]/70"
-            />
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                type="text"
+                value={busquedaCatalogo}
+                onChange={(e) => setBusquedaCatalogo(e.target.value)}
+                placeholder="Filtrar catálogo por nombre, código o rubro..."
+                className="flex-1 min-w-[200px] px-3.5 py-2 text-sm bg-white dark:bg-[#1B1B1F] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-xl placeholder:text-zinc-400 dark:placeholder:text-zinc-500 focus:outline-none focus:border-zinc-900 dark:focus:border-[#F4B6CE]/70"
+              />
+              {cargadosManualCount > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setSoloCargados((prev) => !prev)}
+                  className={`px-3 py-2 rounded-xl text-xs font-medium border transition-colors shrink-0 tabular-nums ${
+                    soloCargados
+                      ? 'bg-zinc-900 text-white border-zinc-900 dark:bg-zinc-100 dark:text-zinc-950 dark:border-zinc-100'
+                      : 'bg-white text-zinc-700 border-zinc-200 hover:bg-zinc-50 dark:bg-[#1B1B1F] dark:text-zinc-200 dark:border-[#2E2E35] dark:hover:bg-[#24242B]'
+                  }`}
+                >
+                  Solo cargados ({cargadosManualCount})
+                </button>
+              )}
+            </div>
             <div className="max-h-72 overflow-y-auto divide-y divide-zinc-200/60 dark:divide-[#26262B]/80 border border-zinc-200/80 dark:border-[#26262B] rounded-xl">
               {catalogoFiltradoManual.map((prod) => {
                 const val = cantidadesManuales[prod.idGrupo] ?? 0;
@@ -800,6 +1077,7 @@ export function NuevoPedidoView({
                       type="number"
                       min={0}
                       value={val === 0 ? '' : val}
+                      onWheel={(e) => e.currentTarget.blur()}
                       onChange={(e) => handleCambioCantidadManual(prod, e.target.value)}
                       placeholder="0"
                       className="w-20 px-2.5 py-1.5 text-sm text-right bg-white dark:bg-[#1B1B1F] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-lg tabular-nums placeholder:text-zinc-400 dark:placeholder:text-zinc-500 focus:outline-none focus:border-zinc-900 dark:focus:border-[#F4B6CE]/70"
@@ -822,27 +1100,51 @@ export function NuevoPedidoView({
               <Plus className="w-3.5 h-3.5" strokeWidth={1.75} />
               Producto fuera de planilla
             </button>
-            <button
-              type="button"
-              onClick={handleCargarEjemploLista006}
-              className="text-xs text-zinc-400 hover:text-[#111111] dark:text-zinc-500 dark:hover:text-[#F4F4F5] underline underline-offset-2 transition-colors"
-            >
-              Probar con planilla de ejemplo
-            </button>
+            {lineasBorrador.length === 0 && (
+              <button
+                type="button"
+                onClick={handleCargarEjemploLista006}
+                className="text-xs text-zinc-400 hover:text-[#111111] dark:text-zinc-500 dark:hover:text-[#F4F4F5] underline underline-offset-2 transition-colors"
+              >
+                Probar con planilla de ejemplo
+              </button>
+            )}
           </div>
           {lineasBorrador.length > 0 && (
-            <button
-              type="button"
-              onClick={() => {
-                setLineasBorrador([]);
-                setCantidadesManuales({});
-                setAdvertenciasExcel([]);
-                setNombreArchivoCargado('');
-              }}
-              className="text-xs text-zinc-400 hover:text-red-600 dark:hover:text-red-400 transition-colors"
-            >
-              Vaciar artículos
-            </button>
+            confirmVaciarArticulos ? (
+              <div className="inline-flex items-center gap-1.5 text-xs bg-red-50 border border-red-200 dark:bg-red-500/10 dark:border-red-500/25 rounded-full px-3 py-1">
+                <span className="text-red-800 dark:text-red-200">¿Vaciar {lineasBorrador.length} ítems?</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLineasBorrador([]);
+                    setCantidadesManuales({});
+                    setAdvertenciasExcel([]);
+                    setNombreArchivoCargado('');
+                    setSoloCargados(false);
+                    setConfirmVaciarArticulos(false);
+                  }}
+                  className="px-2 py-0.5 rounded-full bg-red-600 text-white font-semibold"
+                >
+                  Sí
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setConfirmVaciarArticulos(false)}
+                  className="px-1.5 py-0.5 text-zinc-600 dark:text-zinc-300"
+                >
+                  No
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setConfirmVaciarArticulos(true)}
+                className="text-xs text-zinc-400 hover:text-red-600 dark:hover:text-red-400 transition-colors"
+              >
+                Vaciar artículos
+              </button>
+            )
           )}
         </div>
 
@@ -911,6 +1213,7 @@ export function NuevoPedidoView({
                   min={0}
                   step="0.01"
                   value={fpPrecioNeto}
+                  onWheel={(e) => e.currentTarget.blur()}
                   onChange={(e) => setFpPrecioNeto(e.target.value)}
                   placeholder="0.00"
                   className="w-full px-3 py-2 bg-white dark:bg-[#141417] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-xl tabular-nums placeholder:text-zinc-400 dark:placeholder:text-zinc-500"
@@ -967,6 +1270,7 @@ export function NuevoPedidoView({
                     type="number"
                     min={1}
                     value={fpCantidadTotal}
+                    onWheel={(e) => e.currentTarget.blur()}
                     onChange={(e) => setFpCantidadTotal(e.target.value)}
                     className="w-full px-3 py-2 bg-white dark:bg-[#141417] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-xl tabular-nums"
                   />
@@ -1016,6 +1320,7 @@ export function NuevoPedidoView({
                       type="number"
                       min={0}
                       value={v.cantidad}
+                      onWheel={(e) => e.currentTarget.blur()}
                       onChange={(e) =>
                         setFpVariantes((prev) =>
                           prev.map((item, i) => (i === idx ? { ...item, cantidad: e.target.value } : item))
@@ -1046,6 +1351,7 @@ export function NuevoPedidoView({
                       type="number"
                       min={1}
                       value={fpCantidadTotal}
+                      onWheel={(e) => e.currentTarget.blur()}
                       onChange={(e) => setFpCantidadTotal(e.target.value)}
                       className="w-32 px-3 py-1.5 bg-white dark:bg-[#141417] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-lg tabular-nums"
                     />
@@ -1114,156 +1420,170 @@ export function NuevoPedidoView({
         <section className="bg-red-50/60 border border-red-200/80 dark:bg-red-500/10 dark:border-red-500/25 rounded-2xl p-5 space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="text-xs font-semibold text-red-800 dark:text-red-300">
-              Falta definir talle o color en {totalesBorrador.faltantes} artículo(s)
+              Falta definir talle o color en {totalesBorrador.faltantes}{' '}
+              {totalesBorrador.faltantes === 1 ? 'artículo' : 'artículos'}
             </div>
-            <button
-              type="button"
-              onClick={() => {
-                const msg = generarMensajeWhatsApp(
-                  form.cliente.trim(),
-                  proximoNumeroPedido,
-                  lineasBorrador,
-                  catalogoCompleto
-                );
-                onCopyText('borrador-wsp', msg, 'Mensaje de consulta copiado para WhatsApp.');
-              }}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-white border border-red-200 text-red-700 hover:bg-red-50 dark:bg-[#1B1B1F] dark:border-red-500/30 dark:text-red-300 dark:hover:bg-red-500/15"
-            >
-              {copiadoId === 'borrador-wsp' ? (
-                <Check className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" strokeWidth={1.75} />
+
+            <div className="inline-flex items-center gap-1.5">
+              {waUrlBorrador ? (
+                <>
+                  <a
+                    href={waUrlBorrador}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-emerald-600 hover:bg-emerald-700 text-white transition-colors"
+                  >
+                    <MessageCircle className="w-3.5 h-3.5" strokeWidth={1.75} />
+                    Enviar por WhatsApp
+                  </a>
+                  <button
+                    type="button"
+                    title="Copiar mensaje"
+                    aria-label="Copiar mensaje para WhatsApp"
+                    onClick={() =>
+                      onCopyText('borrador-wsp', msgReclamoBorrador, 'Mensaje de consulta copiado.')
+                    }
+                    className="p-2 rounded-full bg-white border border-red-200 text-red-700 hover:bg-red-50 dark:bg-[#1B1B1F] dark:border-red-500/30 dark:text-red-300"
+                  >
+                    {copiadoId === 'borrador-wsp' ? (
+                      <Check className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" strokeWidth={1.75} />
+                    ) : (
+                      <Copy className="w-3.5 h-3.5" strokeWidth={1.5} />
+                    )}
+                  </button>
+                </>
               ) : (
-                <MessageCircle className="w-3.5 h-3.5" strokeWidth={1.5} />
+                <button
+                  type="button"
+                  onClick={() =>
+                    onCopyText(
+                      'borrador-wsp',
+                      msgReclamoBorrador,
+                      'Mensaje de consulta copiado para WhatsApp.'
+                    )
+                  }
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-white border border-red-200 text-red-700 hover:bg-red-50 dark:bg-[#1B1B1F] dark:border-red-500/30 dark:text-red-300 dark:hover:bg-red-500/15"
+                >
+                  {copiadoId === 'borrador-wsp' ? (
+                    <Check className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" strokeWidth={1.75} />
+                  ) : (
+                    <MessageCircle className="w-3.5 h-3.5" strokeWidth={1.5} />
+                  )}
+                  {copiadoId === 'borrador-wsp' ? 'WhatsApp copiado' : 'Copiar para WhatsApp'}
+                </button>
               )}
-              {copiadoId === 'borrador-wsp' ? 'WhatsApp copiado' : 'Copiar WhatsApp'}
-            </button>
+            </div>
           </div>
 
           <div className="space-y-2.5">
             {lineasBorrador
               .filter((l) => l.requiereRevision || l.estado !== 'OK')
-              .map((l) => {
-                const prod = catalogoCompleto.find((p) => p.idGrupo === l.idGrupo);
-                const variantes = prod ? prod.variantes : l.desglose;
-                if (variantes.length < 2) return null;
-                const key = `borr_${l.idLinea}`;
-                const cur = resolucionesManual[key] ?? variantes.map(() => '0');
-                return (
-                  <div key={l.idLinea} className="bg-white dark:bg-[#1B1B1F] rounded-xl border border-red-200/70 dark:border-red-500/25 p-3.5 space-y-2">
-                    <div className="flex items-center justify-between text-xs">
-                      <span className="font-semibold text-[#111111] dark:text-[#F4F4F5]">{l.nombreProducto}</span>
-                      <span className="font-semibold text-red-700 dark:text-red-300 tabular-nums">Total: {l.cantidadTotal} u.</span>
-                    </div>
-                    {l.motivoRevision && <p className="text-[11px] text-red-600 dark:text-red-400">{l.motivoRevision}</p>}
-                    <div className="flex flex-wrap items-end gap-2">
-                      {variantes.map((v, vIdx) => (
-                        <div key={v.codigo} className="flex-1 min-w-[110px]">
-                          <label className="block text-[11px] text-zinc-500 dark:text-zinc-400 mb-1">
-                            {v.etiqueta} ({v.codigo})
-                          </label>
-                          <input
-                            type="number"
-                            min={0}
-                            max={l.cantidadTotal}
-                            value={cur[vIdx] ?? '0'}
-                            onChange={(e) => {
-                              const nextArr = variantes.map((_, idx) =>
-                                idx === vIdx ? e.target.value : (cur[idx] ?? '0')
-                              );
-                              setResolucionesManual((prev) => ({ ...prev, [key]: nextArr }));
-                            }}
-                            className="w-full px-2.5 py-1.5 text-xs bg-white dark:bg-[#141417] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-lg tabular-nums"
-                          />
-                        </div>
-                      ))}
-                      <button
-                        type="button"
-                        onClick={() =>
-                          handleResolverEnBorrador(
-                            l.idLinea,
-                            variantes.map((_, idx) => parseInt(cur[idx] ?? '0', 10) || 0)
-                          )
-                        }
-                        className="px-3.5 py-1.5 rounded-full text-xs font-medium bg-zinc-900 hover:bg-zinc-800 text-white dark:bg-zinc-100 dark:hover:bg-white dark:text-zinc-950"
-                      >
-                        Confirmar
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
+              .map((l) => renderVariantResolverBorrador(l, 'pendiente'))}
           </div>
         </section>
       )}
 
-      {lineasBorrador.length > 0 && (
+      {(lineasBorrador.length > 0 || hayDatosEnBorrador) && (
         <section className="bg-white dark:bg-[#141417] rounded-2xl border border-[#EAEAEA] dark:border-[#26262B] shadow-[0_1px_2px_rgba(0,0,0,0.03)] p-6 space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">
-              3. Resumen y liquidación ({lineasBorrador.length} ítems · {totalesBorrador.totalUnidades} u.)
-            </h2>
-          </div>
+          {lineasBorrador.length > 0 && (
+            <>
+              <div className="flex items-center justify-between">
+                <h2 className="text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">
+                  3. Resumen y liquidación ({lineasBorrador.length}{' '}
+                  {lineasBorrador.length === 1 ? 'ítem' : 'ítems'} · {totalesBorrador.totalUnidades} u.)
+                </h2>
+              </div>
 
-          <div className="max-h-60 overflow-y-auto divide-y divide-zinc-200/60 dark:divide-[#26262B]/80 border border-zinc-200/70 dark:border-[#26262B] rounded-xl">
-            {lineasBorrador.map((l) => (
-              <div key={l.idLinea} className="px-3.5 py-2.5 flex items-center justify-between gap-3 text-xs">
-                <div className="min-w-0">
-                  <div className="font-medium text-[#111111] dark:text-[#F4F4F5] truncate">{l.nombreProducto}</div>
-                  <div className="text-[11px] text-zinc-400 dark:text-zinc-500 tabular-nums">
-                    {l.requiereRevision
-                      ? `Pendiente definir (${l.cantidadTotal} u.)`
-                      : l.desglose
-                          .filter((d) => d.cantidad > 0)
-                          .map((d) => `${d.codigo} ${d.etiqueta}: ${d.cantidad}`)
-                          .join(' · ')}
+              <div className="max-h-72 overflow-y-auto divide-y divide-zinc-200/60 dark:divide-[#26262B]/80 border border-zinc-200/70 dark:border-[#26262B] rounded-xl">
+                {lineasBorrador.map((l) => {
+                  const prod = catalogoCompleto.find((p) => p.idGrupo === l.idGrupo);
+                  const variantes = prod ? prod.variantes : l.desglose;
+                  const puedeEditarTalles = !l.requiereRevision && variantes.length >= 2;
+                  return (
+                    <div key={l.idLinea} className="px-3.5 py-2.5 space-y-2 text-xs">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="font-medium text-[#111111] dark:text-[#F4F4F5] truncate">
+                            {l.nombreProducto}
+                          </div>
+                          <div className="text-[11px] text-zinc-400 dark:text-zinc-500 tabular-nums">
+                            {l.requiereRevision
+                              ? `Pendiente definir (${l.cantidadTotal} u.)`
+                              : l.desglose
+                                  .filter((d) => d.cantidad > 0)
+                                  .map((d) => `${d.codigo} ${d.etiqueta}: ${d.cantidad}`)
+                                  .join(' · ')}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2.5 shrink-0 tabular-nums">
+                          {puedeEditarTalles && editandoLineaId !== l.idLinea && (
+                            <button
+                              type="button"
+                              onClick={() => setEditandoLineaId(l.idLinea)}
+                              className="text-[11px] text-zinc-400 hover:text-[#111111] dark:text-zinc-500 dark:hover:text-[#F4F4F5] inline-flex items-center gap-1"
+                            >
+                              <Edit3 className="w-3 h-3" strokeWidth={1.5} />
+                              Editar talles
+                            </button>
+                          )}
+                          <span className="font-semibold text-[#111111] dark:text-[#F4F4F5]">
+                            {formatARS(round2(l.precioUnitarioNeto * l.cantidadTotal))}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => handleEliminarLineaBorrador(l.idGrupo)}
+                            className="p-1 text-zinc-400 hover:text-red-600 dark:hover:text-red-400"
+                            aria-label="Quitar artículo"
+                          >
+                            <X className="w-3.5 h-3.5" strokeWidth={1.5} />
+                          </button>
+                        </div>
+                      </div>
+
+                      {editandoLineaId === l.idLinea && renderVariantResolverBorrador(l, 'edicion')}
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="pt-2 space-y-1.5 text-xs tabular-nums">
+                <div className="flex justify-between text-zinc-500 dark:text-zinc-400">
+                  <span>Subtotal Neto</span>
+                  <span>{formatARS(totalesBorrador.subtotalNeto)}</span>
+                </div>
+                {totalesBorrador.montoDescuento > 0 && (
+                  <div className="flex justify-between text-zinc-500 dark:text-zinc-400">
+                    <span>Descuento ({form.descuentoPorc}%)</span>
+                    <span>-{formatARS(totalesBorrador.montoDescuento)}</span>
                   </div>
+                )}
+                <div className="flex justify-between text-zinc-500 dark:text-zinc-400">
+                  <span>Base Imponible (Total B)</span>
+                  <span>{formatARS(totalesBorrador.baseImponible)}</span>
                 </div>
-                <div className="flex items-center gap-3 shrink-0 tabular-nums">
-                  <span className="font-semibold text-[#111111] dark:text-[#F4F4F5]">
-                    {formatARS(round2(l.precioUnitarioNeto * l.cantidadTotal))}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => handleEliminarLineaBorrador(l.idGrupo)}
-                    className="p-1 text-zinc-400 hover:text-red-600 dark:hover:text-red-400"
-                    aria-label="Quitar artículo"
-                  >
-                    <X className="w-3.5 h-3.5" strokeWidth={1.5} />
-                  </button>
+                <div className="flex justify-between text-zinc-500 dark:text-zinc-400">
+                  <span>IVA 21%</span>
+                  <span>{formatARS(totalesBorrador.iva21)}</span>
+                </div>
+                <div className="flex justify-between text-sm font-semibold text-[#111111] dark:text-[#F4F4F5] pt-2 border-t border-zinc-200/70 dark:border-[#26262B]">
+                  <span>Total Facturado</span>
+                  <span>{formatARS(totalesBorrador.totalFacturado)}</span>
                 </div>
               </div>
-            ))}
-          </div>
+            </>
+          )}
 
-          <div className="pt-2 space-y-1.5 text-xs tabular-nums">
-            <div className="flex justify-between text-zinc-500 dark:text-zinc-400">
-              <span>Subtotal Neto</span>
-              <span>{formatARS(totalesBorrador.subtotalNeto)}</span>
-            </div>
-            {totalesBorrador.montoDescuento > 0 && (
-              <div className="flex justify-between text-zinc-500 dark:text-zinc-400">
-                <span>Descuento ({form.descuentoPorc}%)</span>
-                <span>-{formatARS(totalesBorrador.montoDescuento)}</span>
-              </div>
-            )}
-            <div className="flex justify-between text-zinc-500 dark:text-zinc-400">
-              <span>Base Imponible (Total B)</span>
-              <span>{formatARS(totalesBorrador.baseImponible)}</span>
-            </div>
-            <div className="flex justify-between text-zinc-500 dark:text-zinc-400">
-              <span>IVA 21%</span>
-              <span>{formatARS(totalesBorrador.iva21)}</span>
-            </div>
-            <div className="flex justify-between text-sm font-semibold text-[#111111] dark:text-[#F4F4F5] pt-2 border-t border-zinc-200/70 dark:border-[#26262B]">
-              <span>Total Facturado</span>
-              <span>{formatARS(totalesBorrador.totalFacturado)}</span>
-            </div>
-          </div>
+          {faltantesParaGuardar.length > 0 && (
+            <p className="text-xs text-amber-700 dark:text-amber-400 text-center">
+              Para guardar: {faltantesParaGuardar.join(' · ')}.
+            </p>
+          )}
 
           <button
             type="button"
-            disabled={guardandoPedido || advertenciasExcel.length > 0}
+            disabled={guardandoPedido || faltantesParaGuardar.length > 0}
             onClick={() => void handleSubmit()}
-            className="w-full py-3 rounded-full text-sm font-medium bg-zinc-900 hover:bg-zinc-800 text-white dark:bg-zinc-100 dark:hover:bg-white dark:text-zinc-950 transition-colors disabled:opacity-50"
+            className="w-full py-3 rounded-full text-sm font-medium bg-zinc-900 hover:bg-zinc-800 text-white dark:bg-zinc-100 dark:hover:bg-white dark:text-zinc-950 transition-colors disabled:opacity-45 disabled:cursor-not-allowed"
           >
             {guardandoPedido ? 'Guardando...' : 'Guardar pedido'}
           </button>

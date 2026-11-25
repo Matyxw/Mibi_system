@@ -1,14 +1,16 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   Check,
   Clock,
   Copy,
   Download,
+  Edit3,
   Lock,
   MessageCircle,
+  MoreHorizontal,
   Printer,
   Send,
   Trash2,
@@ -16,18 +18,24 @@ import {
   X
 } from 'lucide-react';
 import type { EnviarCuentasResult } from '@/lib/dal/pedidos';
-import { formatARS, formatShortDate, getTodayISO, round2 } from '@/lib/finanzas';
+import { addDaysISO, formatARS, formatARSCompacto, formatShortDate, getTodayISO, round2 } from '@/lib/finanzas';
 import {
   isDepositoRole,
+  type DrawerFocusTarget,
   type EstadoArmado,
   type EstadoEnvio,
+  type LineaPedido,
   type Pedido,
   type PrioridadAsignacion,
   type ProductoCatalogo,
   type ToneStatus,
   type UsuarioEquipo
 } from '@/lib/types';
-import { generarMensajeDespachoWhatsApp, generarMensajeWhatsApp } from '@/lib/whatsapp';
+import {
+  buildWhatsAppUrl,
+  generarMensajeDespachoWhatsApp,
+  generarMensajeWhatsApp
+} from '@/lib/whatsapp';
 import { MibiLogo } from './mibi-logo';
 import { StatusPill } from './status-pill';
 
@@ -36,6 +44,7 @@ interface DrawerDraft {
   whatsapp: string;
   descuentoPorc: string;
   montoAbonado: string;
+  fechaRecepcionCheque: string;
   fechaAcreditacionCheque: string;
   detalleCheque: string;
   transporte: string;
@@ -49,15 +58,19 @@ interface PedidoDrawerProps {
   esDeposito: boolean;
   catalogoCompleto: ReadonlyArray<ProductoCatalogo>;
   cuentasAsignables: ReadonlyArray<UsuarioEquipo>;
+  transportesSugeridos: ReadonlyArray<string>;
+  focusTarget: DrawerFocusTarget;
+  pendingKeys: ReadonlySet<string>;
   copiadoId: string | null;
   onClose: () => void;
   onPatch: (
     pedidoId: string,
     patch: Record<string, unknown>,
-    motivo: string
-  ) => Promise<void>;
-  onConfirmarAcreditacion: (pedido: Pedido) => void;
-  onResolverLinea: (pedido: Pedido, idLinea: string, cantidades: number[]) => void;
+    motivo: string,
+    expectedVersion?: number
+  ) => Promise<boolean>;
+  onConfirmarAcreditacion: (pedido: Pedido) => Promise<void>;
+  onResolverLinea: (pedido: Pedido, idLinea: string, cantidades: number[]) => Promise<boolean>;
   onExportarHojaDeposito: (pedido: Pedido) => void;
   onDuplicarComoNuevo: (pedido: Pedido) => void;
   onEliminarIndividual: (pedido: Pedido) => void;
@@ -81,12 +94,20 @@ const formatHoraCorta = (ts: number | null): string => {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 };
 
+const QUICK_INCIDENCIA_CHIPS = ['Falta stock', 'Artículo dañado', 'Falta dato de envío'] as const;
+
+type SaveSection = 'cliente' | 'pagos' | 'logistica';
+type SaveStatus = 'saving' | 'saved';
+
 export function PedidoDrawer({
   pedido,
   esAdmin,
   esDeposito,
   catalogoCompleto,
   cuentasAsignables,
+  transportesSugeridos,
+  focusTarget,
+  pendingKeys,
   copiadoId,
   onClose,
   onPatch,
@@ -102,14 +123,23 @@ export function PedidoDrawer({
   onCopyText,
   onNotify
 }: PedidoDrawerProps): React.JSX.Element {
+  const datalistId = useId();
   const [mostrarHojaImprimible, setMostrarHojaImprimible] = useState<boolean>(false);
+  const [menuMasAbierto, setMenuMasAbierto] = useState<boolean>(false);
   const [confirmEliminar, setConfirmEliminar] = useState<boolean>(false);
   const [resolucionesManual, setResolucionesManual] = useState<Record<string, string[]>>({});
+  const [editandoLineaId, setEditandoLineaId] = useState<string | null>(null);
+  const [editandoPago, setEditandoPago] = useState<boolean>(false);
+  const [cambiandoFormaCheque, setCambiandoFormaCheque] = useState<boolean>(false);
+  const [confirmArmadoDestino, setConfirmArmadoDestino] = useState<EstadoArmado | null>(null);
+  const [saveState, setSaveState] = useState<Partial<Record<SaveSection, SaveStatus>>>({});
+
   const [draft, setDraft] = useState<DrawerDraft>({
     cliente: pedido.cliente,
     whatsapp: pedido.whatsapp,
     descuentoPorc: String(pedido.descuentoPorc),
     montoAbonado: String(pedido.montoAbonado),
+    fechaRecepcionCheque: pedido.fechaRecepcionCheque,
     fechaAcreditacionCheque: pedido.fechaAcreditacionCheque,
     detalleCheque: pedido.detalleCheque,
     transporte: pedido.transporte,
@@ -130,14 +160,74 @@ export function PedidoDrawer({
   const [incidenciaTexto, setIncidenciaTexto] = useState<string>('');
   const [enviandoIncidencia, setEnviandoIncidencia] = useState<boolean>(false);
 
+  const tallesSectionRef = useRef<HTMLDivElement | null>(null);
+  const firstTalleInputRef = useRef<HTMLInputElement | null>(null);
+  const transporteInputRef = useRef<HTMLInputElement | null>(null);
+  const derivacionSectionRef = useRef<HTMLDivElement | null>(null);
+  const moreMenuRef = useRef<HTMLDivElement | null>(null);
+
+  const cuentasDeposito = useMemo(
+    () => cuentasAsignables.filter((c) => isDepositoRole(c.rol)),
+    [cuentasAsignables]
+  );
+  const cuentasVentas = useMemo(
+    () => cuentasAsignables.filter((c) => !isDepositoRole(c.rol)),
+    [cuentasAsignables]
+  );
+
   useEffect(() => {
     setConfirmEliminar(false);
     setMostrarHojaImprimible(false);
-    setMostrarEnviar(false);
+    setMenuMasAbierto(false);
+    setEditandoLineaId(null);
+    setEditandoPago(false);
+    setCambiandoFormaCheque(false);
+    setConfirmArmadoDestino(null);
     setRequiereConfirmSinPago(false);
     setMostrarIncidenciaForm(false);
     setIncidenciaTexto('');
-  }, [pedido.id]);
+    setSaveState({});
+    setMostrarEnviar(focusTarget === 'derivacion');
+    if (cuentasDeposito.length === 1 && cuentasDeposito[0]) {
+      setCuentaDestinoId(cuentasDeposito[0].id);
+    } else {
+      setCuentaDestinoId('');
+    }
+  }, [pedido.id, focusTarget, cuentasDeposito]);
+
+  useEffect(() => {
+    if (!focusTarget) return;
+    const t = window.setTimeout(() => {
+      if (focusTarget === 'talles') {
+        tallesSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        firstTalleInputRef.current?.focus();
+        firstTalleInputRef.current?.select();
+      } else if (focusTarget === 'transporte') {
+        transporteInputRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        transporteInputRef.current?.focus();
+      } else if (focusTarget === 'derivacion') {
+        derivacionSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }, 60);
+    return () => window.clearTimeout(t);
+  }, [focusTarget, pedido.id]);
+
+  useEffect(() => {
+    if (!confirmEliminar) return;
+    const t = window.setTimeout(() => setConfirmEliminar(false), 5000);
+    return () => window.clearTimeout(t);
+  }, [confirmEliminar]);
+
+  useEffect(() => {
+    if (!menuMasAbierto) return;
+    const onDown = (e: MouseEvent): void => {
+      if (moreMenuRef.current && !moreMenuRef.current.contains(e.target as Node)) {
+        setMenuMasAbierto(false);
+      }
+    };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [menuMasAbierto]);
 
   useEffect(() => {
     setDraft({
@@ -145,6 +235,7 @@ export function PedidoDrawer({
       whatsapp: pedido.whatsapp,
       descuentoPorc: String(pedido.descuentoPorc),
       montoAbonado: String(pedido.montoAbonado),
+      fechaRecepcionCheque: pedido.fechaRecepcionCheque,
       fechaAcreditacionCheque: pedido.fechaAcreditacionCheque,
       detalleCheque: pedido.detalleCheque,
       transporte: pedido.transporte,
@@ -158,12 +249,53 @@ export function PedidoDrawer({
     pedido.whatsapp,
     pedido.descuentoPorc,
     pedido.montoAbonado,
+    pedido.fechaRecepcionCheque,
     pedido.fechaAcreditacionCheque,
     pedido.detalleCheque,
     pedido.transporte,
     pedido.nroSeguimiento,
     pedido.observaciones
   ]);
+
+  const patchConEstado = async (
+    section: SaveSection,
+    patch: Record<string, unknown>,
+    motivo: string
+  ): Promise<boolean> => {
+    setSaveState((prev) => ({ ...prev, [section]: 'saving' }));
+    const ok = await onPatch(pedido.id, patch, motivo, pedido.version);
+    if (ok) {
+      setSaveState((prev) => ({ ...prev, [section]: 'saved' }));
+      window.setTimeout(() => {
+        setSaveState((prev) => {
+          if (prev[section] !== 'saved') return prev;
+          const next = { ...prev };
+          delete next[section];
+          return next;
+        });
+      }, 2000);
+    } else {
+      setSaveState((prev) => {
+        const next = { ...prev };
+        delete next[section];
+        return next;
+      });
+    }
+    return ok;
+  };
+
+  const renderSaveBadge = (section: SaveSection): React.JSX.Element | null => {
+    const st = saveState[section];
+    if (!st) return null;
+    if (st === 'saving') {
+      return <span className="text-[11px] text-zinc-400 dark:text-zinc-500 font-normal">Guardando...</span>;
+    }
+    return (
+      <span className="inline-flex items-center gap-1 text-[11px] text-emerald-700 dark:text-emerald-400 font-medium">
+        <Check className="w-3 h-3" strokeWidth={2} /> Guardado
+      </span>
+    );
+  };
 
   const commitCliente = (): void => {
     const val = draft.cliente.trim();
@@ -174,22 +306,20 @@ export function PedidoDrawer({
     }
     if (val !== pedido.cliente) {
       const motivo = `Actualizó cliente: ${pedido.cliente} → ${val}`.slice(0, 300);
-      void onPatch(pedido.id, { cliente: val }, motivo).then(() => {
-        onNotify('Cliente actualizado.', 'green');
-      });
+      void patchConEstado('cliente', { cliente: val }, motivo);
     }
   };
 
   const commitWhatsapp = (): void => {
     const val = draft.whatsapp.trim();
     if (val !== pedido.whatsapp) {
-      void onPatch(pedido.id, { whatsapp: val }, `Actualizó WhatsApp: ${val || 'vacío'}`);
+      void patchConEstado('cliente', { whatsapp: val }, `Actualizó WhatsApp: ${val || 'vacío'}`);
     }
   };
 
   const handleConfirmarEnvioCuenta = async (forzarSinPago = false): Promise<void> => {
-    if (!cuentaDestinoId) {
-      onNotify('Elegí una cuenta de destino.', 'amber');
+    if (!cuentaDestinoId || enviandoCuenta) {
+      if (!cuentaDestinoId) onNotify('Elegí una cuenta de destino.', 'amber');
       return;
     }
     setEnviandoCuenta(true);
@@ -218,6 +348,7 @@ export function PedidoDrawer({
   };
 
   const handleEnviarIncidencia = async (): Promise<void> => {
+    if (enviandoIncidencia) return;
     const msg = incidenciaTexto.trim();
     if (!msg) {
       onNotify('Describí el faltante o problema antes de enviar.', 'amber');
@@ -230,6 +361,212 @@ export function PedidoDrawer({
     setIncidenciaTexto('');
   };
 
+  const handleCambioArmado = (destino: EstadoArmado): void => {
+    if (destino === pedido.estadoArmado) return;
+    if (pedido.faltantesVariante > 0 && destino === 'Listo') {
+      onNotify('Definí talle o color antes de marcar como Listo.', 'red');
+      return;
+    }
+    if (pedido.estadoEnvio !== 'Pendiente' && destino !== 'Listo' && confirmArmadoDestino !== destino) {
+      setConfirmArmadoDestino(destino);
+      return;
+    }
+    setConfirmArmadoDestino(null);
+    void patchConEstado('logistica', { estadoArmado: destino }, `Cambió armado a ${destino}`);
+  };
+
+  const handleCambioEnvio = (destino: EstadoEnvio): void => {
+    if (destino === pedido.estadoEnvio) return;
+    if (pedido.faltantesVariante > 0 && destino !== 'Pendiente') {
+      onNotify('Definí talle o color antes de despachar.', 'red');
+      return;
+    }
+    void patchConEstado('logistica', { estadoEnvio: destino }, `Cambió envío a ${destino}`).then((ok) => {
+      if (ok && pedido.estadoEnvio === 'Entregado' && destino !== 'Entregado') {
+        onNotify(
+          destino === 'Pendiente'
+            ? 'Envío vuelto a Pendiente; se limpiaron las fechas de despacho y entrega.'
+            : 'Envío vuelto a Despachado; se limpió la fecha de entrega.',
+          'neutral'
+        );
+      }
+    });
+  };
+
+  const renderVariantEditor = (
+    l: LineaPedido,
+    mode: 'pendiente' | 'edicion',
+    isFirstCard: boolean
+  ): React.JSX.Element | null => {
+    const prod = catalogoCompleto.find((p) => p.idGrupo === l.idGrupo);
+    const variantes = prod ? prod.variantes : l.desglose;
+    if (variantes.length < 2) return null;
+
+    const key = mode === 'pendiente' ? `drw_${pedido.id}_${l.idLinea}` : `ed_${pedido.id}_${l.idLinea}`;
+    const defaultArr =
+      mode === 'edicion'
+        ? variantes.map((v) => String(l.desglose.find((d) => d.codigo === v.codigo)?.cantidad ?? 0))
+        : variantes.map(() => '0');
+    const cur = resolucionesManual[key] ?? defaultArr;
+    const nums = variantes.map((_, idx) => Math.max(0, parseInt(cur[idx] ?? '0', 10) || 0));
+    const suma = nums.reduce((acc, q) => acc + q, 0);
+    const diff = l.cantidadTotal - suma;
+    const esDos = variantes.length === 2;
+    const busyKey = `talles:${pedido.id}:${l.idLinea}`;
+    const busy = pendingKeys.has(busyKey);
+
+    const setArr = (nextArr: string[]): void => {
+      setResolucionesManual((prev) => ({ ...prev, [key]: nextArr }));
+    };
+
+    const confirmar = (): void => {
+      if (suma !== l.cantidadTotal) {
+        onNotify(`La suma debe ser exactamente ${l.cantidadTotal} u.`, 'red');
+        return;
+      }
+      void onResolverLinea(pedido, l.idLinea, nums).then((ok) => {
+        if (ok && mode === 'edicion') setEditandoLineaId(null);
+      });
+    };
+
+    const handleVariantInput = (vIdx: number, raw: string): void => {
+      if (esDos) {
+        const cleaned = raw === '' ? 0 : Math.max(0, Math.min(l.cantidadTotal, parseInt(raw, 10) || 0));
+        const other = Math.max(0, l.cantidadTotal - cleaned);
+        if (vIdx === 0) {
+          setArr([raw === '' ? '0' : String(cleaned), String(other)]);
+        } else {
+          setArr([String(other), raw === '' ? '0' : String(cleaned)]);
+        }
+        return;
+      }
+      setArr(variantes.map((_, idx) => (idx === vIdx ? raw : (cur[idx] ?? '0'))));
+    };
+
+    return (
+      <div
+        key={l.idLinea}
+        className={`rounded-xl border p-3 space-y-2.5 ${
+          mode === 'pendiente'
+            ? 'bg-white dark:bg-[#1B1B1F] border-red-200/70 dark:border-red-500/25'
+            : 'bg-[#FAFAFA] dark:bg-[#1B1B1F] border-zinc-200 dark:border-[#2E2E35]'
+        }`}
+      >
+        <div className="flex justify-between items-center text-xs gap-2">
+          <span className="font-semibold text-[#111111] dark:text-[#F4F4F5]">{l.nombreProducto}</span>
+          <span
+            className={`font-semibold tabular-nums ${
+              mode === 'pendiente' ? 'text-red-700 dark:text-red-300' : 'text-zinc-600 dark:text-zinc-300'
+            }`}
+          >
+            Total: {l.cantidadTotal} u.
+          </span>
+        </div>
+
+        {mode === 'pendiente' && l.motivoRevision && (
+          <p className="text-[11px] text-red-600 dark:text-red-400">{l.motivoRevision}</p>
+        )}
+
+        {mode === 'edicion' && pedido.estadoEnvio !== 'Pendiente' && (
+          <p className="text-[11px] text-amber-700 dark:text-amber-400">
+            Atención: este pedido ya está {pedido.estadoEnvio}. Si modificás talles, Depósito recibirá aviso de relectura.
+          </p>
+        )}
+
+        {esDos && (
+          <div className="flex flex-wrap items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => setArr([String(l.cantidadTotal), '0'])}
+              className="px-2.5 py-1 rounded-full text-[11px] font-medium bg-zinc-100 hover:bg-zinc-200/80 text-zinc-700 dark:bg-[#141417] dark:hover:bg-[#24242B] dark:text-zinc-300 border border-zinc-200/70 dark:border-[#2E2E35]"
+            >
+              Todo {variantes[0]?.etiqueta}
+            </button>
+            {l.cantidadTotal % 2 === 0 && (
+              <button
+                type="button"
+                onClick={() => setArr([String(l.cantidadTotal / 2), String(l.cantidadTotal / 2)])}
+                className="px-2.5 py-1 rounded-full text-[11px] font-medium bg-zinc-100 hover:bg-zinc-200/80 text-zinc-700 dark:bg-[#141417] dark:hover:bg-[#24242B] dark:text-zinc-300 border border-zinc-200/70 dark:border-[#2E2E35]"
+              >
+                Mitad y mitad
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setArr(['0', String(l.cantidadTotal)])}
+              className="px-2.5 py-1 rounded-full text-[11px] font-medium bg-zinc-100 hover:bg-zinc-200/80 text-zinc-700 dark:bg-[#141417] dark:hover:bg-[#24242B] dark:text-zinc-300 border border-zinc-200/70 dark:border-[#2E2E35]"
+            >
+              Todo {variantes[1]?.etiqueta}
+            </button>
+          </div>
+        )}
+
+        <div className="flex flex-wrap items-end gap-2">
+          {variantes.map((v, vIdx) => (
+            <div key={v.codigo} className="flex-1 min-w-[100px]">
+              <label className="block text-[11px] text-zinc-500 dark:text-zinc-400 mb-1">
+                {v.etiqueta} ({v.codigo})
+              </label>
+              <input
+                ref={mode === 'pendiente' && isFirstCard && vIdx === 0 ? firstTalleInputRef : undefined}
+                type="number"
+                min={0}
+                max={l.cantidadTotal}
+                value={cur[vIdx] ?? '0'}
+                onWheel={(e) => e.currentTarget.blur()}
+                onChange={(e) => handleVariantInput(vIdx, e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    confirmar();
+                  }
+                }}
+                className="w-full px-2.5 py-1.5 text-xs bg-white dark:bg-[#141417] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-lg tabular-nums"
+              />
+            </div>
+          ))}
+
+          <div className="flex items-center gap-1.5">
+            {mode === 'edicion' && (
+              <button
+                type="button"
+                onClick={() => setEditandoLineaId(null)}
+                className="px-3 py-1.5 rounded-full text-xs border border-zinc-200 dark:border-[#2E2E35] text-zinc-600 dark:text-zinc-300"
+              >
+                Cancelar
+              </button>
+            )}
+            <button
+              type="button"
+              disabled={busy || suma !== l.cantidadTotal}
+              onClick={confirmar}
+              className="px-3.5 py-1.5 rounded-full text-xs font-medium bg-zinc-900 text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-white disabled:opacity-40"
+            >
+              {busy ? 'Guardando...' : 'Confirmar'}
+            </button>
+          </div>
+        </div>
+
+        {!esDos && (
+          <div className="text-[11px] tabular-nums">
+            <span
+              className={
+                diff === 0
+                  ? 'text-emerald-700 dark:text-emerald-400 font-medium'
+                  : diff > 0
+                    ? 'text-amber-700 dark:text-amber-400 font-medium'
+                    : 'text-red-600 dark:text-red-400 font-medium'
+              }
+            >
+              Asignadas: {suma} / {l.cantidadTotal}
+              {diff > 0 ? ` · Faltan ${diff}` : diff < 0 ? ` · Sobran ${Math.abs(diff)}` : ' ✓'}
+            </span>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   const asignacionesDeposito = pedido.asignaciones.filter((a) => isDepositoRole(a.usuarioRol));
   const esUrgenteDeposito = asignacionesDeposito.some((a) => a.prioridad === 'URGENTE');
   const notasDeposito = Array.from(
@@ -237,15 +574,41 @@ export function PedidoDrawer({
   ).join(' · ');
   const requiereRelectura = asignacionesDeposito.some((a) => a.requiereRelectura);
   const totalUnidades = pedido.lineas.reduce((acc, l) => acc + l.cantidadTotal, 0);
+  const completoParaDeposito = pedido.faltantesVariante === 0 && pedido.lineas.length > 0;
 
-  const cuentasDeposito = cuentasAsignables.filter((c) => isDepositoRole(c.rol));
-  const cuentasVentas = cuentasAsignables.filter((c) => !isDepositoRole(c.rol));
+  const msgReclamoTalles = generarMensajeWhatsApp(
+    pedido.cliente,
+    pedido.numeroPedido,
+    pedido.lineas,
+    catalogoCompleto
+  );
+  const waUrlReclamo = buildWhatsAppUrl(pedido.whatsapp, msgReclamoTalles);
+
+  const msgDespacho = generarMensajeDespachoWhatsApp({
+    cliente: pedido.cliente,
+    numeroPedido: pedido.numeroPedido,
+    transporte: draft.transporte.trim(),
+    nroSeguimiento: draft.nroSeguimiento.trim()
+  });
+  const waUrlDespacho = buildWhatsAppUrl(pedido.whatsapp, msgDespacho);
+
+  const busyHoja = pendingKeys.has(`hoja:${pedido.id}`);
+  const busyAcreditar = pendingKeys.has(`acreditar:${pedido.id}`);
+  const busyEliminar = pendingKeys.has(`eliminar:${pedido.id}`);
+
+  const lineasPendientes = pedido.lineas.filter((l) => l.requiereRevision || l.estado !== 'OK');
 
   return (
     <div
       className="fixed inset-0 z-50 flex justify-end bg-black/25 dark:bg-black/60 backdrop-blur-[1px]"
       onClick={onClose}
     >
+      <datalist id={datalistId}>
+        {transportesSugeridos.map((t) => (
+          <option key={t} value={t} />
+        ))}
+      </datalist>
+
       <aside
         onClick={(e) => e.stopPropagation()}
         className="w-full max-w-xl bg-white dark:bg-[#141417] h-full overflow-y-auto border-l border-[#EAEAEA] dark:border-[#26262B] shadow-2xl flex flex-col"
@@ -253,9 +616,19 @@ export function PedidoDrawer({
         <div className="sticky top-0 z-10 bg-white/95 dark:bg-[#141417]/90 backdrop-blur border-b border-[#EAEAEA] dark:border-[#26262B] px-6 py-4 flex items-center justify-between gap-3">
           <div>
             <div className="flex items-center gap-2 flex-wrap">
-              <h2 className="text-base font-semibold text-[#111111] dark:text-[#F4F4F5] tabular-nums">
-                Pedido #{pedido.numeroPedido}
-              </h2>
+              <button
+                type="button"
+                onClick={() =>
+                  onCopyText(`num-${pedido.id}`, pedido.numeroPedido, `Número #${pedido.numeroPedido} copiado.`)
+                }
+                title="Clic para copiar número de pedido"
+                className="text-base font-semibold text-[#111111] dark:text-[#F4F4F5] tabular-nums hover:underline inline-flex items-center gap-1"
+              >
+                <span>Pedido #{pedido.numeroPedido}</span>
+                {copiadoId === `num-${pedido.id}` && (
+                  <Check className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" strokeWidth={2} />
+                )}
+              </button>
               {pedido.faltantesVariante > 0 ? (
                 <StatusPill tone="red">Falta talle o color</StatusPill>
               ) : (
@@ -281,39 +654,113 @@ export function PedidoDrawer({
         </div>
 
         <div className="p-6 space-y-6 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              disabled={pedido.faltantesVariante > 0 || pedido.lineas.length === 0}
-              onClick={() => onExportarHojaDeposito(pedido)}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full text-xs font-medium bg-zinc-900 text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-white transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              <Download className="w-3.5 h-3.5" strokeWidth={1.5} />
-              Hoja depósito (.xlsx)
-            </button>
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              {completoParaDeposito && !mostrarHojaImprimible && (
+                <>
+                  <button
+                    type="button"
+                    disabled={busyHoja}
+                    onClick={() => onExportarHojaDeposito(pedido)}
+                    className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full text-xs font-medium bg-zinc-900 text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-white transition-colors disabled:opacity-40"
+                  >
+                    <Download className="w-3.5 h-3.5" strokeWidth={1.5} />
+                    {busyHoja ? 'Descargando...' : 'Hoja depósito (.xlsx)'}
+                  </button>
 
-            <button
-              type="button"
-              disabled={pedido.faltantesVariante > 0}
-              onClick={() => setMostrarHojaImprimible(!mostrarHojaImprimible)}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full text-xs font-medium bg-white border border-zinc-200 text-zinc-700 hover:bg-zinc-50 dark:bg-[#1B1B1F] dark:border-[#2E2E35] dark:text-zinc-200 dark:hover:bg-[#24242B] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              <Printer className="w-3.5 h-3.5" strokeWidth={1.5} />
-              {mostrarHojaImprimible ? 'Ver gestión' : 'Vista imprimible'}
-            </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMostrarHojaImprimible(true);
+                      window.setTimeout(() => window.print(), 60);
+                    }}
+                    className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full text-xs font-medium bg-white border border-zinc-200 text-zinc-700 hover:bg-zinc-50 dark:bg-[#1B1B1F] dark:border-[#2E2E35] dark:text-zinc-200 dark:hover:bg-[#24242B] transition-colors"
+                  >
+                    <Printer className="w-3.5 h-3.5" strokeWidth={1.5} />
+                    Imprimir
+                  </button>
+                </>
+              )}
 
-            {!esDeposito && (
-              <button
-                type="button"
-                onClick={() => onDuplicarComoNuevo(pedido)}
-                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full text-xs font-medium bg-white border border-zinc-200 text-zinc-700 hover:bg-zinc-50 dark:bg-[#1B1B1F] dark:border-[#2E2E35] dark:text-zinc-200 dark:hover:bg-[#24242B] transition-colors"
-                title="Crea un pedido nuevo prellenando cliente, vendedor y WhatsApp"
-              >
-                <Copy className="w-3.5 h-3.5" strokeWidth={1.5} />
-                Duplicar como nuevo
-              </button>
+              {mostrarHojaImprimible && (
+                <button
+                  type="button"
+                  onClick={() => setMostrarHojaImprimible(false)}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full text-xs font-medium bg-white border border-zinc-200 text-zinc-700 hover:bg-zinc-50 dark:bg-[#1B1B1F] dark:border-[#2E2E35] dark:text-zinc-200 dark:hover:bg-[#24242B] transition-colors"
+                >
+                  Volver a gestión
+                </button>
+              )}
+            </div>
+
+            {!esDeposito && !mostrarHojaImprimible && (
+              <div ref={moreMenuRef} className="relative ml-auto">
+                <button
+                  type="button"
+                  onClick={() => setMenuMasAbierto((prev) => !prev)}
+                  aria-label="Más acciones"
+                  className="p-2 rounded-full border border-zinc-200 text-zinc-600 hover:bg-zinc-50 dark:bg-[#1B1B1F] dark:border-[#2E2E35] dark:text-zinc-300 dark:hover:bg-[#24242B] transition-colors"
+                >
+                  <MoreHorizontal className="w-4 h-4" strokeWidth={1.5} />
+                </button>
+
+                {menuMasAbierto && (
+                  <div className="absolute right-0 mt-1.5 w-52 bg-white dark:bg-[#18181D] rounded-2xl border border-[#EAEAEA] dark:border-[#2E2E36] shadow-[0_12px_36px_rgba(0,0,0,0.12)] dark:shadow-[0_12px_36px_rgba(0,0,0,0.55)] p-1.5 z-30 text-xs">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMenuMasAbierto(false);
+                        onDuplicarComoNuevo(pedido);
+                      }}
+                      className="w-full text-left px-3 py-2 rounded-xl flex items-center gap-2 text-[#111111] dark:text-[#F4F4F5] hover:bg-zinc-100 dark:hover:bg-[#24242B]"
+                    >
+                      <Copy className="w-3.5 h-3.5 text-zinc-500 dark:text-zinc-400" strokeWidth={1.5} />
+                      <span>Duplicar como nuevo</span>
+                    </button>
+
+                    {esAdmin && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setMenuMasAbierto(false);
+                          setConfirmEliminar(true);
+                        }}
+                        className="w-full text-left px-3 py-2 rounded-xl flex items-center gap-2 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" strokeWidth={1.5} />
+                        <span>Eliminar pedido</span>
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
             )}
           </div>
+
+          {confirmEliminar && esAdmin && !mostrarHojaImprimible && (
+            <div className="bg-red-50/80 border border-red-200 dark:bg-red-500/10 dark:border-red-500/25 rounded-2xl px-4 py-3 flex items-center justify-between gap-3 text-xs">
+              <span className="text-red-800 dark:text-red-200 font-medium">
+                ¿Eliminar el pedido #{pedido.numeroPedido}?
+              </span>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setConfirmEliminar(false)}
+                  className="px-3 py-1 rounded-full bg-white border border-zinc-200 text-zinc-700 dark:bg-[#1B1B1F] dark:border-[#2E2E35] dark:text-zinc-200"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  disabled={busyEliminar}
+                  onClick={() => onEliminarIndividual(pedido)}
+                  className="px-3.5 py-1 rounded-full bg-red-600 hover:bg-red-700 text-white font-medium disabled:opacity-40"
+                >
+                  {busyEliminar ? 'Eliminando...' : 'Confirmar'}
+                </button>
+              </div>
+            </div>
+          )}
 
           {mostrarHojaImprimible ? (
             <div className="mibi-print-area space-y-4 bg-white text-[#111111] border border-zinc-200 rounded-2xl p-5">
@@ -422,8 +869,9 @@ export function PedidoDrawer({
                     {esAdmin && (
                       <button
                         type="button"
+                        disabled={pendingKeys.has(`resolverInc:${pedido.id}`)}
                         onClick={() => void onResolverIncidencia(pedido.id)}
-                        className="px-3 py-1 rounded-full text-[11px] font-medium bg-white border border-amber-300 text-amber-900 hover:bg-amber-100 dark:bg-[#1B1B1F] dark:border-amber-500/35 dark:text-amber-200 dark:hover:bg-amber-500/20"
+                        className="px-3 py-1 rounded-full text-[11px] font-medium bg-white border border-amber-300 text-amber-900 hover:bg-amber-100 dark:bg-[#1B1B1F] dark:border-amber-500/35 dark:text-amber-200 dark:hover:bg-amber-500/20 disabled:opacity-40"
                       >
                         Marcar resuelto
                       </button>
@@ -434,93 +882,75 @@ export function PedidoDrawer({
               )}
 
               {!esDeposito && pedido.faltantesVariante > 0 && (
-                <div className="bg-red-50/70 border border-red-200 dark:bg-red-500/10 dark:border-red-500/25 rounded-2xl p-4 space-y-3">
-                  <div className="flex items-center justify-between gap-2">
+                <div
+                  ref={tallesSectionRef}
+                  className="bg-red-50/70 border border-red-200 dark:bg-red-500/10 dark:border-red-500/25 rounded-2xl p-4 space-y-3"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
                     <span className="text-xs font-semibold text-red-800 dark:text-red-300">
                       Falta definir talle o color ({pedido.faltantesVariante})
                     </span>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const msg = generarMensajeWhatsApp(
-                          pedido.cliente,
-                          pedido.numeroPedido,
-                          pedido.lineas,
-                          catalogoCompleto
-                        );
-                        onCopyText(`wsp-${pedido.id}`, msg, 'Reclamo para WhatsApp copiado.');
-                      }}
-                      className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-medium bg-white border border-red-200 text-red-700 hover:bg-red-50 dark:bg-[#1B1B1F] dark:border-red-500/30 dark:text-red-300 dark:hover:bg-red-500/15"
-                    >
-                      {copiadoId === `wsp-${pedido.id}` ? (
-                        <Check className="w-3 h-3 text-emerald-600 dark:text-emerald-400" strokeWidth={1.75} />
+
+                    <div className="inline-flex items-center gap-1.5">
+                      {waUrlReclamo ? (
+                        <>
+                          <a
+                            href={waUrlReclamo}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-medium bg-emerald-600 hover:bg-emerald-700 text-white transition-colors"
+                          >
+                            <MessageCircle className="w-3 h-3" strokeWidth={1.75} />
+                            Enviar por WhatsApp
+                          </a>
+                          <button
+                            type="button"
+                            title="Copiar mensaje"
+                            aria-label="Copiar mensaje de reclamo"
+                            onClick={() =>
+                              onCopyText(`wsp-${pedido.id}`, msgReclamoTalles, 'Mensaje copiado para WhatsApp.')
+                            }
+                            className="p-1.5 rounded-full bg-white border border-red-200 text-red-700 hover:bg-red-50 dark:bg-[#1B1B1F] dark:border-red-500/30 dark:text-red-300"
+                          >
+                            {copiadoId === `wsp-${pedido.id}` ? (
+                              <Check className="w-3 h-3 text-emerald-600 dark:text-emerald-400" strokeWidth={1.75} />
+                            ) : (
+                              <Copy className="w-3 h-3" strokeWidth={1.5} />
+                            )}
+                          </button>
+                        </>
                       ) : (
-                        <MessageCircle className="w-3 h-3" strokeWidth={1.5} />
+                        <button
+                          type="button"
+                          onClick={() =>
+                            onCopyText(
+                              `wsp-${pedido.id}`,
+                              msgReclamoTalles,
+                              'Reclamo para WhatsApp copiado.'
+                            )
+                          }
+                          className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-medium bg-white border border-red-200 text-red-700 hover:bg-red-50 dark:bg-[#1B1B1F] dark:border-red-500/30 dark:text-red-300 dark:hover:bg-red-500/15"
+                        >
+                          {copiadoId === `wsp-${pedido.id}` ? (
+                            <Check className="w-3 h-3 text-emerald-600 dark:text-emerald-400" strokeWidth={1.75} />
+                          ) : (
+                            <MessageCircle className="w-3 h-3" strokeWidth={1.5} />
+                          )}
+                          {copiadoId === `wsp-${pedido.id}` ? 'Copiado' : 'Copiar para WhatsApp'}
+                        </button>
                       )}
-                      {copiadoId === `wsp-${pedido.id}` ? 'Copiado' : 'Copiar WhatsApp'}
-                    </button>
+                    </div>
                   </div>
 
-                  {pedido.lineas
-                    .filter((l) => l.requiereRevision || l.estado !== 'OK')
-                    .map((l) => {
-                      const prod = catalogoCompleto.find((p) => p.idGrupo === l.idGrupo);
-                      const variantes = prod ? prod.variantes : l.desglose;
-                      if (variantes.length < 2) return null;
-                      const key = `drw_${pedido.id}_${l.idLinea}`;
-                      const cur = resolucionesManual[key] ?? variantes.map(() => '0');
-                      return (
-                        <div key={l.idLinea} className="bg-white dark:bg-[#1B1B1F] rounded-xl border border-red-200/70 dark:border-red-500/25 p-3 space-y-2">
-                          <div className="flex justify-between text-xs">
-                            <span className="font-semibold text-[#111111] dark:text-[#F4F4F5]">{l.nombreProducto}</span>
-                            <span className="font-semibold text-red-700 dark:text-red-300 tabular-nums">
-                              Total: {l.cantidadTotal} u.
-                            </span>
-                          </div>
-                          {l.motivoRevision && <p className="text-[11px] text-red-600 dark:text-red-400">{l.motivoRevision}</p>}
-                          <div className="flex flex-wrap items-end gap-2">
-                            {variantes.map((v, vIdx) => (
-                              <div key={v.codigo} className="flex-1 min-w-[100px]">
-                                <label className="block text-[11px] text-zinc-500 dark:text-zinc-400 mb-1">
-                                  {v.etiqueta} ({v.codigo})
-                                </label>
-                                <input
-                                  type="number"
-                                  min={0}
-                                  max={l.cantidadTotal}
-                                  value={cur[vIdx] ?? '0'}
-                                  onChange={(e) => {
-                                    const nextArr = variantes.map((_, idx) =>
-                                      idx === vIdx ? e.target.value : (cur[idx] ?? '0')
-                                    );
-                                    setResolucionesManual((prev) => ({ ...prev, [key]: nextArr }));
-                                  }}
-                                  className="w-full px-2.5 py-1.5 text-xs bg-white dark:bg-[#141417] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-lg tabular-nums"
-                                />
-                              </div>
-                            ))}
-                            <button
-                              type="button"
-                              onClick={() =>
-                                onResolverLinea(
-                                  pedido,
-                                  l.idLinea,
-                                  variantes.map((_, idx) => parseInt(cur[idx] ?? '0', 10) || 0)
-                                )
-                              }
-                              className="px-3.5 py-1.5 rounded-full text-xs font-medium bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-950"
-                            >
-                              Confirmar
-                            </button>
-                          </div>
-                        </div>
-                      );
-                    })}
+                  {lineasPendientes.map((l, idx) => renderVariantEditor(l, 'pendiente', idx === 0))}
                 </div>
               )}
 
               {esAdmin && (
-                <div className="space-y-3 bg-[#FAFAFA] dark:bg-[#1B1B1F] rounded-2xl border border-zinc-200/80 dark:border-[#26262B] p-4 text-xs">
+                <div
+                  ref={derivacionSectionRef}
+                  className="space-y-3 bg-[#FAFAFA] dark:bg-[#1B1B1F] rounded-2xl border border-zinc-200/80 dark:border-[#26262B] p-4 text-xs"
+                >
                   <div className="flex items-center justify-between gap-2">
                     <h3 className="text-xs font-semibold text-zinc-600 dark:text-zinc-300 uppercase tracking-wider flex items-center gap-1.5">
                       <UserCheck className="w-3.5 h-3.5" strokeWidth={1.5} />
@@ -567,8 +997,9 @@ export function PedidoDrawer({
                           </div>
                           <button
                             type="button"
+                            disabled={pendingKeys.has(`retirar:${pedido.id}:${a.usuarioId}`)}
                             onClick={() => void onRetirarAsignacion(pedido.id, a.usuarioId)}
-                            className="p-1 text-zinc-400 hover:text-red-600 dark:hover:text-red-400"
+                            className="p-1 text-zinc-400 hover:text-red-600 dark:hover:text-red-400 disabled:opacity-40"
                             title={`Retirar de ${a.usuarioNombre}`}
                             aria-label={`Retirar asignación de ${a.usuarioNombre}`}
                           >
@@ -655,7 +1086,7 @@ export function PedidoDrawer({
                               type="button"
                               disabled={enviandoCuenta}
                               onClick={() => void handleConfirmarEnvioCuenta(true)}
-                              className="flex-1 py-1.5 rounded-full bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-950 font-medium"
+                              className="flex-1 py-1.5 rounded-full bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-950 font-medium disabled:opacity-40"
                             >
                               Liberar igual
                             </button>
@@ -678,9 +1109,12 @@ export function PedidoDrawer({
 
               {!esDeposito && (
                 <div className="space-y-3">
-                  <h3 className="text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">
-                    Datos del cliente
-                  </h3>
+                  <div className="flex items-center justify-between gap-2">
+                    <h3 className="text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">
+                      Datos del cliente
+                    </h3>
+                    {renderSaveBadge('cliente')}
+                  </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
                     <div>
                       <label htmlFor={`drawer-cliente-${pedido.id}`} className="block text-[11px] text-zinc-500 dark:text-zinc-400 mb-1">
@@ -724,10 +1158,13 @@ export function PedidoDrawer({
 
               {!esDeposito && (
                 <div className="pt-5 border-t border-zinc-200/70 dark:border-[#26262B] space-y-3">
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">
-                      Pagos y liquidación
-                    </h3>
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">
+                        Pagos y liquidación
+                      </h3>
+                      {renderSaveBadge('pagos')}
+                    </div>
                     {pedido.estadoPago === 'Pagado' ? (
                       <StatusPill tone="green">Pagado</StatusPill>
                     ) : pedido.estadoPago === 'Pendiente' ? (
@@ -771,138 +1208,65 @@ export function PedidoDrawer({
                   </div>
 
                   {esAdmin ? (
-                    <div className="space-y-2.5 text-xs">
-                      {pedido.medioPago === 'Cheque' && !pedido.chequeAcreditado && (
+                    pedido.estadoPago === 'Pagado' && !editandoPago ? (
+                      <div className="flex items-center justify-between gap-2 bg-emerald-50/70 border border-emerald-200/80 dark:bg-emerald-500/10 dark:border-emerald-500/25 rounded-xl px-3.5 py-2.5 text-xs">
+                        <span className="font-medium text-emerald-800 dark:text-emerald-300">
+                          Pagado al 100% · Cobrado en mano ({formatARS(pedido.montoAbonado)})
+                        </span>
                         <button
                           type="button"
-                          onClick={() => onConfirmarAcreditacion(pedido)}
-                          className="w-full py-2.5 rounded-full text-xs font-medium bg-emerald-600 hover:bg-emerald-700 text-white transition-colors"
+                          onClick={() => setEditandoPago(true)}
+                          className="text-[11px] font-medium text-emerald-900 dark:text-emerald-200 underline underline-offset-2 shrink-0"
                         >
-                          Confirmar plata acreditada → Pasar a Pagado
+                          Editar pago
                         </button>
-                      )}
-
-                      <div className="grid grid-cols-3 gap-2">
-                        {(['Sin pagar', 'Transferencia / Efectivo', 'Cheque'] as const).map((m) => (
-                          <button
-                            key={m}
-                            type="button"
-                            onClick={() => {
-                              if (m === 'Transferencia / Efectivo') {
-                                void onPatch(
-                                  pedido.id,
-                                  {
-                                    medioPago: m,
-                                    montoAbonado: pedido.totalFacturado,
-                                    montoCheque: 0,
-                                    chequeAcreditado: true
-                                  },
-                                  'Marcó pago completo (Transferencia / Efectivo)'
-                                );
-                              } else if (m === 'Cheque') {
-                                const hoy = getTodayISO();
-                                void onPatch(
-                                  pedido.id,
-                                  {
-                                    medioPago: 'Cheque',
-                                    chequeAcreditado: false,
-                                    montoCheque: round2(pedido.totalFacturado - pedido.montoAbonado),
-                                    fechaRecepcionCheque: pedido.fechaRecepcionCheque || hoy,
-                                    fechaAcreditacionCheque:
-                                      pedido.fechaAcreditacionCheque ||
-                                      new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10)
-                                  },
-                                  'Registró pago con Cheque (30 días)'
-                                );
-                              } else {
-                                void onPatch(
-                                  pedido.id,
-                                  {
-                                    medioPago: 'Sin pagar',
-                                    montoAbonado: 0,
-                                    montoCheque: 0,
-                                    chequeAcreditado: false
-                                  },
-                                  'Pasó estado de pago a Sin pagar'
-                                );
-                              }
-                            }}
-                            className={`py-2 px-2 rounded-xl border text-[11px] font-medium transition-colors ${
-                              pedido.medioPago === m
-                                ? 'bg-zinc-900 text-white border-zinc-900 dark:bg-zinc-100 dark:text-zinc-950 dark:border-zinc-100'
-                                : 'bg-white text-zinc-700 border-zinc-200 hover:bg-zinc-50 dark:bg-[#1B1B1F] dark:text-zinc-300 dark:border-[#2E2E35] dark:hover:bg-[#24242B]'
-                            }`}
-                          >
-                            {m === 'Transferencia / Efectivo' ? 'Cobrado' : m}
-                          </button>
-                        ))}
                       </div>
+                    ) : pedido.medioPago === 'Cheque' && !pedido.chequeAcreditado && !cambiandoFormaCheque ? (
+                      <div className="space-y-3 text-xs">
+                        <button
+                          type="button"
+                          disabled={busyAcreditar}
+                          onClick={() => void onConfirmarAcreditacion(pedido)}
+                          className="w-full py-2.5 rounded-full text-xs font-medium bg-emerald-600 hover:bg-emerald-700 text-white transition-colors disabled:opacity-40"
+                        >
+                          {busyAcreditar
+                            ? 'Acreditando...'
+                            : `Acreditar cheque (${formatARSCompacto(pedido.montoCheque || pedido.saldoPendiente)}) → Pasar a Pagado`}
+                        </button>
 
-                      <div className="grid grid-cols-2 gap-3">
-                        <div>
-                          <label className="block text-[11px] text-zinc-500 dark:text-zinc-400 mb-1">Monto abonado ($)</label>
-                          <input
-                            type="number"
-                            min={0}
-                            max={pedido.totalFacturado}
-                            step="0.01"
-                            value={draft.montoAbonado}
-                            onChange={(e) => setDraft((prev) => ({ ...prev, montoAbonado: e.target.value }))}
-                            onBlur={() => {
-                              const val = Math.max(
-                                0,
-                                Math.min(pedido.totalFacturado, parseFloat(draft.montoAbonado) || 0)
-                              );
-                              if (Math.abs(val - pedido.montoAbonado) > 0.005) {
-                                void onPatch(
-                                  pedido.id,
-                                  {
-                                    montoAbonado: round2(val),
-                                    ...(val > 0 && pedido.medioPago === 'Sin pagar'
-                                      ? { medioPago: 'Transferencia / Efectivo' }
-                                      : {})
-                                  },
-                                  `Actualizó monto abonado a ${formatARS(val)}`
-                                );
-                              }
-                            }}
-                            className="w-full px-3 py-2 bg-white dark:bg-[#1B1B1F] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-xl tabular-nums"
-                          />
-                        </div>
-
-                        <div>
-                          <label className="block text-[11px] text-zinc-500 dark:text-zinc-400 mb-1">Descuento (%)</label>
-                          <input
-                            type="number"
-                            min={0}
-                            max={100}
-                            step="0.5"
-                            disabled={pedido.lineas.length === 0}
-                            value={draft.descuentoPorc}
-                            onChange={(e) => setDraft((prev) => ({ ...prev, descuentoPorc: e.target.value }))}
-                            onBlur={() => {
-                              if (pedido.lineas.length === 0) {
-                                onNotify('Los pedidos históricos sin detalle mantienen su total importado.', 'amber');
-                                return;
-                              }
-                              const val = Math.max(0, Math.min(100, parseFloat(draft.descuentoPorc) || 0));
-                              if (val !== pedido.descuentoPorc) {
-                                void onPatch(
-                                  pedido.id,
-                                  { descuentoPorc: val },
-                                  `Actualizó descuento a ${val}%`
-                                );
-                              }
-                            }}
-                            className="w-full px-3 py-2 bg-white dark:bg-[#1B1B1F] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-xl tabular-nums disabled:bg-zinc-50 dark:disabled:bg-[#141417] disabled:text-zinc-400 dark:disabled:text-zinc-500"
-                          />
-                        </div>
-                      </div>
-
-                      {pedido.medioPago === 'Cheque' && !pedido.chequeAcreditado && (
-                        <div className="grid grid-cols-2 gap-3 pt-1">
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
                           <div>
-                            <label className="block text-[11px] text-zinc-500 dark:text-zinc-400 mb-1">Fecha acreditación cheque</label>
+                            <label className="block text-[11px] text-zinc-500 dark:text-zinc-400 mb-1">
+                              Recepción cheque
+                            </label>
+                            <input
+                              type="date"
+                              value={draft.fechaRecepcionCheque}
+                              onChange={(e) => {
+                                const rec = e.target.value;
+                                setDraft((prev) => ({
+                                  ...prev,
+                                  fechaRecepcionCheque: rec,
+                                  ...(rec ? { fechaAcreditacionCheque: addDaysISO(rec, 30) } : {})
+                                }));
+                              }}
+                              onBlur={() => {
+                                const f = draft.fechaRecepcionCheque;
+                                if (f && f !== pedido.fechaRecepcionCheque) {
+                                  void patchConEstado(
+                                    'pagos',
+                                    { fechaRecepcionCheque: f },
+                                    `Actualizó recepción de cheque a ${formatShortDate(f)} (+30d)`
+                                  );
+                                }
+                              }}
+                              className="w-full px-3 py-2 bg-white dark:bg-[#1B1B1F] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-xl tabular-nums"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[11px] text-zinc-500 dark:text-zinc-400 mb-1">
+                              Vencimiento (+30d)
+                            </label>
                             <input
                               type="date"
                               value={draft.fechaAcreditacionCheque}
@@ -912,8 +1276,8 @@ export function PedidoDrawer({
                               onBlur={() => {
                                 const f = draft.fechaAcreditacionCheque;
                                 if (f && f !== pedido.fechaAcreditacionCheque) {
-                                  void onPatch(
-                                    pedido.id,
+                                  void patchConEstado(
+                                    'pagos',
                                     { fechaAcreditacionCheque: f },
                                     `Actualizó vencimiento de cheque a ${formatShortDate(f)}`
                                   );
@@ -923,7 +1287,9 @@ export function PedidoDrawer({
                             />
                           </div>
                           <div>
-                            <label className="block text-[11px] text-zinc-500 dark:text-zinc-400 mb-1">Detalle cheque</label>
+                            <label className="block text-[11px] text-zinc-500 dark:text-zinc-400 mb-1">
+                              Detalle cheque
+                            </label>
                             <input
                               type="text"
                               value={draft.detalleCheque}
@@ -931,19 +1297,228 @@ export function PedidoDrawer({
                               onBlur={() => {
                                 const d = draft.detalleCheque.trim();
                                 if (d !== pedido.detalleCheque) {
-                                  void onPatch(
-                                    pedido.id,
+                                  void patchConEstado(
+                                    'pagos',
                                     { detalleCheque: d },
                                     'Actualizó detalle de cheque'
                                   );
                                 }
                               }}
-                              className="w-full px-3 py-2 bg-white dark:bg-[#1B1B1F] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-xl"
+                              placeholder="Banco / N.º"
+                              className="w-full px-3 py-2 bg-white dark:bg-[#1B1B1F] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-xl placeholder:text-zinc-400 dark:placeholder:text-zinc-500"
                             />
                           </div>
                         </div>
-                      )}
-                    </div>
+
+                        <div className="flex justify-end">
+                          <button
+                            type="button"
+                            onClick={() => setCambiandoFormaCheque(true)}
+                            className="text-[11px] text-zinc-500 hover:text-[#111111] dark:text-zinc-400 dark:hover:text-[#F4F4F5] underline underline-offset-2"
+                          >
+                            Cambiar forma de pago
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="space-y-3 text-xs">
+                        {editandoPago && pedido.estadoPago === 'Pagado' && (
+                          <div className="flex justify-end">
+                            <button
+                              type="button"
+                              onClick={() => setEditandoPago(false)}
+                              className="text-[11px] text-zinc-500 hover:text-[#111111] dark:text-zinc-400 dark:hover:text-[#F4F4F5] underline underline-offset-2"
+                            >
+                              Ocultar edición de pago
+                            </button>
+                          </div>
+                        )}
+
+                        <div className="grid grid-cols-3 p-1 rounded-xl bg-zinc-100 dark:bg-[#1B1B1F] border border-zinc-200/70 dark:border-[#26262B] gap-1">
+                          {(['Sin pagar', 'Transferencia / Efectivo', 'Cheque'] as const).map((m) => (
+                            <button
+                              key={m}
+                              type="button"
+                              onClick={() => {
+                                setCambiandoFormaCheque(false);
+                                if (m === 'Transferencia / Efectivo') {
+                                  void patchConEstado(
+                                    'pagos',
+                                    {
+                                      medioPago: m,
+                                      montoAbonado: pedido.totalFacturado,
+                                      montoCheque: 0,
+                                      chequeAcreditado: true
+                                    },
+                                    'Marcó pago completo (Transferencia / Efectivo)'
+                                  ).then((ok) => {
+                                    if (ok) setEditandoPago(false);
+                                  });
+                                } else if (m === 'Cheque') {
+                                  const hoy = getTodayISO();
+                                  void patchConEstado(
+                                    'pagos',
+                                    {
+                                      medioPago: 'Cheque',
+                                      chequeAcreditado: false,
+                                      montoCheque: round2(pedido.totalFacturado - pedido.montoAbonado),
+                                      fechaRecepcionCheque: pedido.fechaRecepcionCheque || hoy,
+                                      fechaAcreditacionCheque:
+                                        pedido.fechaAcreditacionCheque || addDaysISO(hoy, 30)
+                                    },
+                                    'Registró pago con Cheque (30 días)'
+                                  );
+                                } else {
+                                  void patchConEstado(
+                                    'pagos',
+                                    {
+                                      medioPago: 'Sin pagar',
+                                      montoAbonado: 0,
+                                      montoCheque: 0,
+                                      chequeAcreditado: false
+                                    },
+                                    'Pasó estado de pago a Sin pagar'
+                                  );
+                                }
+                              }}
+                              className={`min-h-[36px] px-2 rounded-lg text-[11px] font-medium transition-colors ${
+                                pedido.medioPago === m
+                                  ? 'bg-white text-[#111111] dark:bg-[#2A2A32] dark:text-white shadow-sm'
+                                  : 'text-zinc-600 hover:text-[#111111] dark:text-zinc-400 dark:hover:text-[#F4F4F5]'
+                              }`}
+                            >
+                              {m === 'Transferencia / Efectivo' ? 'Pago / Seña' : m}
+                            </button>
+                          ))}
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div>
+                            <div className="flex items-center justify-between gap-1 mb-1">
+                              <label className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                                Monto abonado ($)
+                              </label>
+                              {pedido.saldoPendiente > 0.01 && (
+                                <div className="flex items-center gap-1">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setDraft((prev) => ({
+                                        ...prev,
+                                        montoAbonado: String(pedido.totalFacturado)
+                                      }));
+                                      void patchConEstado(
+                                        'pagos',
+                                        {
+                                          medioPago: 'Transferencia / Efectivo',
+                                          chequeAcreditado: true,
+                                          montoAbonado: pedido.totalFacturado,
+                                          montoCheque: 0
+                                        },
+                                        `Saldó resto (${formatARS(pedido.totalFacturado)})`
+                                      );
+                                    }}
+                                    className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-emerald-50 text-emerald-700 border border-emerald-200/70 hover:bg-emerald-100 dark:bg-emerald-500/15 dark:text-emerald-300 dark:border-emerald-500/30"
+                                  >
+                                    Saldar resto
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const mitad = round2(pedido.totalFacturado / 2);
+                                      setDraft((prev) => ({ ...prev, montoAbonado: String(mitad) }));
+                                      void patchConEstado(
+                                        'pagos',
+                                        {
+                                          ...(pedido.medioPago === 'Sin pagar'
+                                            ? { medioPago: 'Transferencia / Efectivo' }
+                                            : {}),
+                                          montoAbonado: mitad
+                                        },
+                                        `Registró seña 50% (${formatARS(mitad)})`
+                                      );
+                                    }}
+                                    className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-zinc-100 text-zinc-700 border border-zinc-200/80 hover:bg-zinc-200/80 dark:bg-[#141417] dark:text-zinc-300 dark:border-[#2E2E35]"
+                                  >
+                                    50%
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                            <input
+                              type="number"
+                              min={0}
+                              max={pedido.totalFacturado}
+                              step="0.01"
+                              value={draft.montoAbonado}
+                              onWheel={(e) => e.currentTarget.blur()}
+                              onChange={(e) => setDraft((prev) => ({ ...prev, montoAbonado: e.target.value }))}
+                              onBlur={() => {
+                                const val = Math.max(
+                                  0,
+                                  Math.min(pedido.totalFacturado, parseFloat(draft.montoAbonado) || 0)
+                                );
+                                if (Math.abs(val - pedido.montoAbonado) > 0.005) {
+                                  void patchConEstado(
+                                    'pagos',
+                                    {
+                                      montoAbonado: round2(val),
+                                      ...(val > 0 && pedido.medioPago === 'Sin pagar'
+                                        ? { medioPago: 'Transferencia / Efectivo' }
+                                        : {})
+                                    },
+                                    `Actualizó monto abonado a ${formatARS(val)}`
+                                  );
+                                }
+                              }}
+                              className="w-full px-3 py-2 bg-white dark:bg-[#1B1B1F] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-xl tabular-nums"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block text-[11px] text-zinc-500 dark:text-zinc-400 mb-1">
+                              Descuento (%)
+                            </label>
+                            <input
+                              type="number"
+                              min={0}
+                              max={100}
+                              step="0.5"
+                              disabled={pedido.lineas.length === 0}
+                              value={draft.descuentoPorc}
+                              onWheel={(e) => e.currentTarget.blur()}
+                              onChange={(e) => setDraft((prev) => ({ ...prev, descuentoPorc: e.target.value }))}
+                              onBlur={() => {
+                                if (pedido.lineas.length === 0) {
+                                  onNotify('Los pedidos históricos sin detalle mantienen su total importado.', 'amber');
+                                  return;
+                                }
+                                const val = Math.max(0, Math.min(100, parseFloat(draft.descuentoPorc) || 0));
+                                if (val !== pedido.descuentoPorc) {
+                                  const prevAbonado = pedido.montoAbonado;
+                                  void patchConEstado(
+                                    'pagos',
+                                    { descuentoPorc: val },
+                                    `Actualizó descuento a ${val}%`
+                                  ).then((ok) => {
+                                    if (ok && prevAbonado > 0) {
+                                      const nuevoTot = round2(pedido.subtotalNeto * (1 - val / 100) * 1.21);
+                                      if (nuevoTot < prevAbonado) {
+                                        onNotify(
+                                          `El monto cobrado se ajustó al nuevo total de ${formatARS(nuevoTot)}.`,
+                                          'amber'
+                                        );
+                                      }
+                                    }
+                                  });
+                                }
+                              }}
+                              className="w-full px-3 py-2 bg-white dark:bg-[#1B1B1F] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-xl tabular-nums disabled:bg-zinc-50 dark:disabled:bg-[#141417] disabled:text-zinc-400 dark:disabled:text-zinc-500"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    )
                   ) : (
                     <p className="text-[11px] text-zinc-400 dark:text-zinc-500 flex items-center gap-1.5">
                       <Lock className="w-3 h-3" strokeWidth={1.5} />
@@ -954,110 +1529,224 @@ export function PedidoDrawer({
               )}
 
               <div className="pt-5 border-t border-zinc-200/70 dark:border-[#26262B] space-y-3">
-                <div className="flex items-center justify-between gap-2">
-                  <h3 className="text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">Armado y envío</h3>
-                  {draft.transporte.trim() && draft.nroSeguimiento.trim() && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const msg = generarMensajeDespachoWhatsApp({
-                          cliente: pedido.cliente,
-                          numeroPedido: pedido.numeroPedido,
-                          transporte: draft.transporte.trim(),
-                          nroSeguimiento: draft.nroSeguimiento.trim()
-                        });
-                        if (msg) onCopyText(`envio-${pedido.id}`, msg, 'Aviso de envío copiado para WhatsApp');
-                      }}
-                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium bg-zinc-100 hover:bg-zinc-200/80 text-zinc-700 dark:bg-[#1B1B1F] dark:hover:bg-[#24242B] dark:text-zinc-200 transition-colors"
-                    >
-                      {copiadoId === `envio-${pedido.id}` ? (
-                        <Check className="w-3 h-3 text-emerald-600 dark:text-emerald-400" strokeWidth={1.75} />
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">
+                      Armado y envío
+                    </h3>
+                    {renderSaveBadge('logistica')}
+                  </div>
+
+                  {msgDespacho && (
+                    <div className="inline-flex items-center gap-1">
+                      {waUrlDespacho ? (
+                        <>
+                          <a
+                            href={waUrlDespacho}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium bg-emerald-600 hover:bg-emerald-700 text-white transition-colors"
+                          >
+                            <Send className="w-3 h-3" strokeWidth={1.5} />
+                            Enviar aviso por WhatsApp
+                          </a>
+                          <button
+                            type="button"
+                            title="Copiar mensaje de envío"
+                            aria-label="Copiar mensaje de envío"
+                            onClick={() =>
+                              onCopyText(`envio-${pedido.id}`, msgDespacho, 'Aviso de envío copiado.')
+                            }
+                            className="p-1.5 rounded-full bg-zinc-100 hover:bg-zinc-200/80 text-zinc-700 dark:bg-[#1B1B1F] dark:hover:bg-[#24242B] dark:text-zinc-200"
+                          >
+                            {copiadoId === `envio-${pedido.id}` ? (
+                              <Check className="w-3 h-3 text-emerald-600 dark:text-emerald-400" strokeWidth={1.75} />
+                            ) : (
+                              <Copy className="w-3 h-3" strokeWidth={1.5} />
+                            )}
+                          </button>
+                        </>
                       ) : (
-                        <Send className="w-3 h-3" strokeWidth={1.5} />
+                        <button
+                          type="button"
+                          onClick={() =>
+                            onCopyText(
+                              `envio-${pedido.id}`,
+                              msgDespacho,
+                              'Aviso de envío copiado para WhatsApp'
+                            )
+                          }
+                          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium bg-zinc-100 hover:bg-zinc-200/80 text-zinc-700 dark:bg-[#1B1B1F] dark:hover:bg-[#24242B] dark:text-zinc-200 transition-colors"
+                        >
+                          {copiadoId === `envio-${pedido.id}` ? (
+                            <Check className="w-3 h-3 text-emerald-600 dark:text-emerald-400" strokeWidth={1.75} />
+                          ) : (
+                            <Send className="w-3 h-3" strokeWidth={1.5} />
+                          )}
+                          {copiadoId === `envio-${pedido.id}` ? 'Aviso copiado' : 'Copiar aviso de envío'}
+                        </button>
                       )}
-                      {copiadoId === `envio-${pedido.id}` ? 'Aviso copiado' : 'Copiar aviso de envío'}
-                    </button>
+                    </div>
                   )}
                 </div>
 
-                <div className="grid grid-cols-2 gap-3 text-xs">
+                <div className="space-y-3 text-xs">
                   <div>
-                    <label className="block text-[11px] text-zinc-500 dark:text-zinc-400 mb-1">Estado de armado</label>
+                    <label className="block text-[11px] text-zinc-500 dark:text-zinc-400 mb-1.5">
+                      Estado de armado
+                    </label>
                     {pedido.faltantesVariante > 0 ? (
                       <div className="px-3 py-2 rounded-xl bg-red-50 text-red-700 border border-red-200/70 dark:bg-red-500/10 dark:text-red-300 dark:border-red-500/25 font-medium">
-                        Falta talle o color
+                        Falta talle o color — definilo arriba para poder armar
                       </div>
                     ) : (
-                      <select
-                        value={pedido.estadoArmado}
-                        onChange={(e) => {
-                          const nuevoEstado = e.target.value as EstadoArmado;
-                          void onPatch(pedido.id, { estadoArmado: nuevoEstado }, `Cambió armado a ${nuevoEstado}`);
-                        }}
-                        className="w-full px-3 py-2 bg-white dark:bg-[#1B1B1F] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-xl"
-                      >
-                        <option value="Por armar">Por armar</option>
-                        <option value="En armado">En armado</option>
-                        <option value="Listo">Listo para armar</option>
-                      </select>
+                      <div className="space-y-2">
+                        <div className="grid grid-cols-3 p-1 rounded-xl bg-zinc-100 dark:bg-[#1B1B1F] border border-zinc-200/70 dark:border-[#26262B] gap-1">
+                          {(['Por armar', 'En armado', 'Listo'] as const).map((est) => {
+                            const activo = pedido.estadoArmado === est;
+                            return (
+                              <button
+                                key={est}
+                                type="button"
+                                onClick={() => handleCambioArmado(est)}
+                                className={`min-h-[38px] px-2 rounded-lg text-xs font-medium transition-colors ${
+                                  activo
+                                    ? 'bg-white text-[#111111] dark:bg-[#2A2A32] dark:text-white shadow-sm'
+                                    : 'text-zinc-600 hover:text-[#111111] dark:text-zinc-400 dark:hover:text-[#F4F4F5]'
+                                }`}
+                              >
+                                {est === 'Listo' ? 'Listo' : est}
+                              </button>
+                            );
+                          })}
+                        </div>
+
+                        {confirmArmadoDestino && (
+                          <div className="flex items-center justify-between gap-2 bg-amber-50 border border-amber-200 dark:bg-amber-500/10 dark:border-amber-500/25 rounded-xl px-3 py-2 text-[11px]">
+                            <span className="text-amber-900 dark:text-amber-200">
+                              El pedido figura {pedido.estadoEnvio}. ¿Cambiar armado a {confirmArmadoDestino}?
+                            </span>
+                            <div className="flex gap-1.5 shrink-0">
+                              <button
+                                type="button"
+                                onClick={() => setConfirmArmadoDestino(null)}
+                                className="px-2.5 py-0.5 rounded-full bg-white border border-zinc-200 text-zinc-700 dark:bg-[#1B1B1F] dark:border-[#2E2E35] dark:text-zinc-200"
+                              >
+                                No
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const d = confirmArmadoDestino;
+                                  setConfirmArmadoDestino(null);
+                                  void patchConEstado('logistica', { estadoArmado: d }, `Cambió armado a ${d}`);
+                                }}
+                                className="px-2.5 py-0.5 rounded-full bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-950 font-medium"
+                              >
+                                Sí
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
                     )}
                   </div>
 
                   <div>
-                    <label className="block text-[11px] text-zinc-500 dark:text-zinc-400 mb-1">Estado de envío</label>
-                    <select
-                      value={pedido.estadoEnvio}
-                      onChange={(e) => {
-                        const nuevoEnvio = e.target.value as EstadoEnvio;
-                        void onPatch(pedido.id, { estadoEnvio: nuevoEnvio }, `Cambió envío a ${nuevoEnvio}`);
-                      }}
-                      className="w-full px-3 py-2 bg-white dark:bg-[#1B1B1F] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-xl"
-                    >
-                      <option value="Pendiente">Pendiente</option>
-                      <option value="Despachado">Despachado</option>
-                      <option value="Entregado">Entregado</option>
-                    </select>
+                    <label className="block text-[11px] text-zinc-500 dark:text-zinc-400 mb-1.5">
+                      Estado de envío
+                    </label>
+                    <div className="grid grid-cols-3 p-1 rounded-xl bg-zinc-100 dark:bg-[#1B1B1F] border border-zinc-200/70 dark:border-[#26262B] gap-1">
+                      {(['Pendiente', 'Despachado', 'Entregado'] as const).map((est) => {
+                        const activo = pedido.estadoEnvio === est;
+                        const bloqueado = pedido.faltantesVariante > 0 && est !== 'Pendiente';
+                        return (
+                          <button
+                            key={est}
+                            type="button"
+                            disabled={bloqueado}
+                            title={bloqueado ? 'Definí los talles para poder despachar' : undefined}
+                            onClick={() => handleCambioEnvio(est)}
+                            className={`min-h-[38px] px-2 rounded-lg text-xs font-medium transition-colors disabled:opacity-35 disabled:cursor-not-allowed ${
+                              activo
+                                ? 'bg-white text-[#111111] dark:bg-[#2A2A32] dark:text-white shadow-sm'
+                                : 'text-zinc-600 hover:text-[#111111] dark:text-zinc-400 dark:hover:text-[#F4F4F5]'
+                            }`}
+                          >
+                            {est}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-[11px] text-zinc-500 dark:text-zinc-400 mb-1">Transporte</label>
+                      <input
+                        ref={transporteInputRef}
+                        type="text"
+                        list={datalistId}
+                        value={draft.transporte}
+                        onChange={(e) => setDraft((prev) => ({ ...prev, transporte: e.target.value }))}
+                        onBlur={() => {
+                          const val = draft.transporte.trim();
+                          if (val !== pedido.transporte) {
+                            void patchConEstado('logistica', { transporte: val }, `Transporte: ${val || 'vacío'}`);
+                          }
+                        }}
+                        placeholder="Ej. Andreani, Cruz del Sur"
+                        className="w-full px-3 py-2 bg-white dark:bg-[#1B1B1F] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-xl placeholder:text-zinc-400 dark:placeholder:text-zinc-500"
+                      />
+                    </div>
+
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                          N.º de seguimiento / guía
+                        </label>
+                        {draft.nroSeguimiento.trim() && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              onCopyText(
+                                `guia-${pedido.id}`,
+                                draft.nroSeguimiento.trim(),
+                                'Guía de seguimiento copiada.'
+                              )
+                            }
+                            className="inline-flex items-center gap-1 text-[10px] text-zinc-500 hover:text-[#111111] dark:text-zinc-400 dark:hover:text-[#F4F4F5]"
+                          >
+                            {copiadoId === `guia-${pedido.id}` ? (
+                              <Check className="w-3 h-3 text-emerald-600 dark:text-emerald-400" strokeWidth={2} />
+                            ) : (
+                              <Copy className="w-3 h-3" strokeWidth={1.5} />
+                            )}
+                            {copiadoId === `guia-${pedido.id}` ? 'Copiada' : 'Copiar'}
+                          </button>
+                        )}
+                      </div>
+                      <input
+                        type="text"
+                        value={draft.nroSeguimiento}
+                        onChange={(e) => setDraft((prev) => ({ ...prev, nroSeguimiento: e.target.value }))}
+                        onBlur={() => {
+                          const val = draft.nroSeguimiento.trim();
+                          if (val !== pedido.nroSeguimiento) {
+                            void patchConEstado(
+                              'logistica',
+                              { nroSeguimiento: val },
+                              `Guía de seguimiento: ${val || 'vacía'}`
+                            );
+                          }
+                        }}
+                        placeholder="Código de guía"
+                        className="w-full px-3 py-2 bg-white dark:bg-[#1B1B1F] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-xl tabular-nums placeholder:text-zinc-400 dark:placeholder:text-zinc-500"
+                      />
+                    </div>
                   </div>
 
                   <div>
-                    <label className="block text-[11px] text-zinc-500 dark:text-zinc-400 mb-1">Transporte</label>
-                    <input
-                      type="text"
-                      value={draft.transporte}
-                      onChange={(e) => setDraft((prev) => ({ ...prev, transporte: e.target.value }))}
-                      onBlur={() => {
-                        const val = draft.transporte.trim();
-                        if (val !== pedido.transporte) {
-                          void onPatch(pedido.id, { transporte: val }, `Transporte: ${val || 'vacío'}`);
-                        }
-                      }}
-                      placeholder="Ej. Andreani, Cruz del Sur"
-                      className="w-full px-3 py-2 bg-white dark:bg-[#1B1B1F] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-xl placeholder:text-zinc-400 dark:placeholder:text-zinc-500"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-[11px] text-zinc-500 dark:text-zinc-400 mb-1">N.º de seguimiento / guía</label>
-                    <input
-                      type="text"
-                      value={draft.nroSeguimiento}
-                      onChange={(e) => setDraft((prev) => ({ ...prev, nroSeguimiento: e.target.value }))}
-                      onBlur={() => {
-                        const val = draft.nroSeguimiento.trim();
-                        if (val !== pedido.nroSeguimiento) {
-                          void onPatch(
-                            pedido.id,
-                            { nroSeguimiento: val },
-                            `Guía de seguimiento: ${val || 'vacía'}`
-                          );
-                        }
-                      }}
-                      placeholder="Código de guía"
-                      className="w-full px-3 py-2 bg-white dark:bg-[#1B1B1F] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-xl tabular-nums placeholder:text-zinc-400 dark:placeholder:text-zinc-500"
-                    />
-                  </div>
-
-                  <div className="col-span-2">
                     <label className="block text-[11px] text-zinc-500 dark:text-zinc-400 mb-1">Observaciones</label>
                     <textarea
                       rows={2}
@@ -1066,7 +1755,7 @@ export function PedidoDrawer({
                       onBlur={() => {
                         const val = draft.observaciones.trim();
                         if (val !== pedido.observaciones) {
-                          void onPatch(pedido.id, { observaciones: val }, 'Actualizó observaciones');
+                          void patchConEstado('logistica', { observaciones: val }, 'Actualizó observaciones');
                         }
                       }}
                       className="w-full px-3 py-2 bg-white dark:bg-[#1B1B1F] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-xl"
@@ -1090,6 +1779,20 @@ export function PedidoDrawer({
                         <label className="block text-[11px] font-medium text-amber-900 dark:text-amber-200">
                           Detalle para Administración
                         </label>
+                        <div className="flex flex-wrap gap-1.5">
+                          {QUICK_INCIDENCIA_CHIPS.map((chip) => (
+                            <button
+                              key={chip}
+                              type="button"
+                              onClick={() =>
+                                setIncidenciaTexto((prev) => (prev.trim() ? `${prev.trim()} · ${chip}` : chip))
+                              }
+                              className="px-2.5 py-1 rounded-full text-[11px] bg-white border border-amber-200 text-amber-900 hover:bg-amber-100 dark:bg-[#1B1B1F] dark:border-amber-500/30 dark:text-amber-200"
+                            >
+                              + {chip}
+                            </button>
+                          ))}
+                        </div>
                         <textarea
                           rows={2}
                           value={incidenciaTexto}
@@ -1109,7 +1812,7 @@ export function PedidoDrawer({
                             type="button"
                             disabled={enviandoIncidencia}
                             onClick={() => void handleEnviarIncidencia()}
-                            className="px-3.5 py-1.5 rounded-full bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-950 font-medium"
+                            className="px-3.5 py-1.5 rounded-full bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-950 font-medium disabled:opacity-40"
                           >
                             {enviandoIncidencia ? 'Enviando...' : 'Enviar aviso'}
                           </button>
@@ -1126,26 +1829,47 @@ export function PedidoDrawer({
                     Detalle de artículos ({pedido.lineas.length} · {totalUnidades} u.)
                   </h3>
                   <div className="divide-y divide-zinc-200/60 dark:divide-[#26262B]/80 border border-zinc-200/80 dark:border-[#26262B] rounded-xl">
-                    {pedido.lineas.map((l) => (
-                      <div key={l.idLinea} className="px-3.5 py-2.5 text-xs flex justify-between gap-2">
-                        <div>
-                          <div className="font-medium text-[#111111] dark:text-[#F4F4F5]">{l.nombreProducto}</div>
-                          <div className="text-[11px] text-zinc-400 dark:text-zinc-500 tabular-nums">
-                            {l.requiereRevision
-                              ? `Sin definir (${l.cantidadTotal} u.)`
-                              : l.desglose
-                                  .filter((d) => d.cantidad > 0)
-                                  .map((d) => `${d.codigo} · ${d.etiqueta}: ${d.cantidad}`)
-                                  .join(' | ')}
+                    {pedido.lineas.map((l) => {
+                      const prod = catalogoCompleto.find((p) => p.idGrupo === l.idGrupo);
+                      const variantes = prod ? prod.variantes : l.desglose;
+                      const puedeEditarTalles = !esDeposito && !l.requiereRevision && variantes.length >= 2;
+                      return (
+                        <div key={l.idLinea} className="px-3.5 py-2.5 text-xs space-y-2">
+                          <div className="flex justify-between gap-2 items-start">
+                            <div>
+                              <div className="font-medium text-[#111111] dark:text-[#F4F4F5]">{l.nombreProducto}</div>
+                              <div className="text-[11px] text-zinc-400 dark:text-zinc-500 tabular-nums">
+                                {l.requiereRevision
+                                  ? `Sin definir (${l.cantidadTotal} u.)`
+                                  : l.desglose
+                                      .filter((d) => d.cantidad > 0)
+                                      .map((d) => `${d.codigo} · ${d.etiqueta}: ${d.cantidad}`)
+                                      .join(' | ')}
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-2.5 shrink-0">
+                              {puedeEditarTalles && editandoLineaId !== l.idLinea && (
+                                <button
+                                  type="button"
+                                  onClick={() => setEditandoLineaId(l.idLinea)}
+                                  className="text-[11px] text-zinc-400 hover:text-[#111111] dark:text-zinc-500 dark:hover:text-[#F4F4F5] inline-flex items-center gap-1"
+                                >
+                                  <Edit3 className="w-3 h-3" strokeWidth={1.5} />
+                                  Editar talles
+                                </button>
+                              )}
+                              <div className="font-semibold text-[#111111] dark:text-[#F4F4F5] tabular-nums whitespace-nowrap">
+                                {esDeposito
+                                  ? `${l.cantidadTotal} u.`
+                                  : formatARS(round2(l.precioUnitarioNeto * l.cantidadTotal))}
+                              </div>
+                            </div>
                           </div>
+
+                          {editandoLineaId === l.idLinea && renderVariantEditor(l, 'edicion', false)}
                         </div>
-                        <div className="font-semibold text-[#111111] dark:text-[#F4F4F5] tabular-nums whitespace-nowrap">
-                          {esDeposito
-                            ? `${l.cantidadTotal} u.`
-                            : formatARS(round2(l.precioUnitarioNeto * l.cantidadTotal))}
-                        </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               )}
@@ -1166,38 +1890,6 @@ export function PedidoDrawer({
                   ))}
                 </ul>
               </div>
-
-              {esAdmin && (
-                <div className="pt-5 border-t border-zinc-200/70 dark:border-[#26262B] flex justify-end">
-                  {confirmEliminar ? (
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setConfirmEliminar(false)}
-                        className="px-3 py-1.5 rounded-full text-xs border border-zinc-200 dark:border-[#2E2E35] text-zinc-600 dark:text-zinc-300"
-                      >
-                        Cancelar
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => onEliminarIndividual(pedido)}
-                        className="px-3.5 py-1.5 rounded-full text-xs font-medium bg-red-600 text-white"
-                      >
-                        Confirmar eliminación
-                      </button>
-                    </div>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => setConfirmEliminar(true)}
-                      className="inline-flex items-center gap-1.5 text-xs text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" strokeWidth={1.5} />
-                      Eliminar pedido
-                    </button>
-                  )}
-                </div>
-              )}
             </>
           )}
         </div>

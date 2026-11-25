@@ -1,12 +1,11 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useId, useMemo, useState } from 'react';
 import {
   CreditCard,
   Download,
   FileSpreadsheet,
   Layers,
-  Lock,
   Send,
   Trash2,
   Truck,
@@ -31,6 +30,7 @@ interface FloatingBatchBarProps {
   esAdmin: boolean;
   esDeposito: boolean;
   cuentasAsignables: ReadonlyArray<UsuarioEquipo>;
+  transportesSugeridos: ReadonlyArray<string>;
   batchPanel: BatchPanelActivo;
   setBatchPanel: React.Dispatch<React.SetStateAction<BatchPanelActivo>>;
   onLimpiarSeleccion: () => void;
@@ -58,6 +58,7 @@ export function FloatingBatchBar({
   esAdmin,
   esDeposito,
   cuentasAsignables,
+  transportesSugeridos,
   batchPanel,
   setBatchPanel,
   onLimpiarSeleccion,
@@ -70,6 +71,7 @@ export function FloatingBatchBar({
   onExportPickingConsolidado,
   onConfirmarEliminarLote
 }: FloatingBatchBarProps): React.JSX.Element {
+  const datalistId = useId();
   const [batchTransporte, setBatchTransporte] = useState<string>('');
   const [batchVendedor, setBatchVendedor] = useState<string>('Juancho');
   const [cuentaId, setCuentaId] = useState<string>('');
@@ -78,11 +80,54 @@ export function FloatingBatchBar({
   const [confirmSinPago, setConfirmSinPago] = useState<string[] | null>(null);
   const [enviando, setEnviando] = useState<boolean>(false);
 
-  const cuentasDeposito = cuentasAsignables.filter((c) => isDepositoRole(c.rol));
-  const cuentasVentas = cuentasAsignables.filter((c) => !isDepositoRole(c.rol));
+  const cuentasDeposito = useMemo(
+    () => cuentasAsignables.filter((c) => isDepositoRole(c.rol)),
+    [cuentasAsignables]
+  );
+  const cuentasVentas = useMemo(
+    () => cuentasAsignables.filter((c) => !isDepositoRole(c.rol)),
+    [cuentasAsignables]
+  );
+
+  useEffect(() => {
+    if (cuentasDeposito.length === 1 && cuentasDeposito[0] && !cuentaId) {
+      setCuentaId(cuentasDeposito[0].id);
+    }
+  }, [cuentasDeposito, cuentaId]);
+
+  const cuentaSeleccionada = useMemo(
+    () => cuentasAsignables.find((c) => c.id === cuentaId) ?? null,
+    [cuentasAsignables, cuentaId]
+  );
+
+  const faltantesArmadoCount = useMemo(
+    () => pedidosSeleccionados.filter((p) => p.faltantesVariante > 0).length,
+    [pedidosSeleccionados]
+  );
+  const validosListoCount = selectedCount - faltantesArmadoCount;
+
+  const listosPickingCount = useMemo(
+    () =>
+      pedidosSeleccionados.filter(
+        (p) => p.faltantesVariante === 0 && p.lineas.length > 0 && p.lineas.every((l) => l.estado === 'OK')
+      ).length,
+    [pedidosSeleccionados]
+  );
+
+  const validosParaDepositoCount = useMemo(
+    () =>
+      pedidosSeleccionados.filter((p) => p.faltantesVariante === 0 && p.lineas.length > 0).length,
+    [pedidosSeleccionados]
+  );
+  const bloqueadosDepositoCount = selectedCount - validosParaDepositoCount;
+
+  const todosPagados = useMemo(
+    () => pedidosSeleccionados.length > 0 && pedidosSeleccionados.every((p) => p.estadoPago === 'Pagado'),
+    [pedidosSeleccionados]
+  );
 
   const ejecutarEnvioLote = async (forzarSinPago = false): Promise<void> => {
-    if (!cuentaId) return;
+    if (!cuentaId || enviando) return;
     setEnviando(true);
     const res = await onEnviarLoteACuentas({
       pedidoIds: pedidosSeleccionados.map((p) => p.id),
@@ -105,10 +150,16 @@ export function FloatingBatchBar({
   };
 
   return (
-    <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 max-w-[96vw]">
+    <div className="fixed bottom-4 sm:bottom-6 left-1/2 -translate-x-1/2 z-40 max-w-[calc(100vw-24px)]">
+      <datalist id={datalistId}>
+        {transportesSugeridos.map((t) => (
+          <option key={t} value={t} />
+        ))}
+      </datalist>
+
       <div className="relative">
         {batchPanel === 'estado' && (
-          <div className="absolute bottom-full mb-2.5 left-1/2 -translate-x-1/2 w-80 bg-white dark:bg-[#18181D] text-[#111111] dark:text-[#F4F4F5] rounded-2xl border border-[#EAEAEA] dark:border-[#2E2E36] shadow-[0_12px_36px_rgba(0,0,0,0.12)] dark:shadow-[0_12px_36px_rgba(0,0,0,0.55)] p-4 space-y-3.5">
+          <div className="absolute bottom-full mb-2.5 left-1/2 -translate-x-1/2 w-[min(20rem,calc(100vw-24px))] bg-white dark:bg-[#18181D] text-[#111111] dark:text-[#F4F4F5] rounded-2xl border border-[#EAEAEA] dark:border-[#2E2E36] shadow-[0_12px_36px_rgba(0,0,0,0.12)] dark:shadow-[0_12px_36px_rgba(0,0,0,0.55)] p-4 space-y-3.5">
             <div className="flex items-center justify-between">
               <span className="text-xs font-semibold text-[#111111] dark:text-[#F4F4F5]">Armado y envío en lote</span>
               <button
@@ -132,18 +183,25 @@ export function FloatingBatchBar({
                 </button>
                 <button
                   type="button"
+                  disabled={validosListoCount === 0}
                   onClick={() => onBatchArmado('Listo')}
-                  className="px-3 py-2 rounded-xl text-xs font-medium bg-emerald-50 hover:bg-emerald-100/80 border border-emerald-200/70 text-emerald-800 dark:bg-emerald-500/[0.12] dark:hover:bg-emerald-500/20 dark:border-emerald-500/25 dark:text-emerald-300 transition-colors"
+                  className="px-3 py-2 rounded-xl text-xs font-medium bg-emerald-50 hover:bg-emerald-100/80 border border-emerald-200/70 text-emerald-800 dark:bg-emerald-500/[0.12] dark:hover:bg-emerald-500/20 dark:border-emerald-500/25 dark:text-emerald-300 transition-colors disabled:opacity-40"
                 >
-                  Listo para armar
+                  Marcar Listo
                 </button>
               </div>
+              {faltantesArmadoCount > 0 && (
+                <p className="text-[11px] text-amber-700 dark:text-amber-400 tabular-nums">
+                  {validosListoCount} pasarán a Listo · {faltantesArmadoCount} omitido(s) por falta de talle.
+                </p>
+              )}
             </div>
 
             <div className="pt-3 border-t border-zinc-200/70 dark:border-[#26262B] space-y-2">
               <span className="text-[11px] text-zinc-400 dark:text-zinc-500 font-medium">Despacho y transporte</span>
               <input
                 type="text"
+                list={datalistId}
                 value={batchTransporte}
                 onChange={(e) => setBatchTransporte(e.target.value)}
                 placeholder="Transporte opcional (ej. Andreani, Cruz del Sur)"
@@ -152,21 +210,23 @@ export function FloatingBatchBar({
               <div className="grid grid-cols-2 gap-1.5">
                 <button
                   type="button"
+                  disabled={validosListoCount === 0}
                   onClick={() => {
                     onBatchEnvio('Despachado', batchTransporte);
                     setBatchTransporte('');
                   }}
-                  className="px-3 py-2 rounded-xl text-xs font-medium bg-zinc-900 hover:bg-zinc-800 text-white dark:bg-zinc-100 dark:hover:bg-white dark:text-zinc-950 transition-colors"
+                  className="px-3 py-2 rounded-xl text-xs font-medium bg-zinc-900 hover:bg-zinc-800 text-white dark:bg-zinc-100 dark:hover:bg-white dark:text-zinc-950 transition-colors disabled:opacity-40"
                 >
                   Marcar Despachado
                 </button>
                 <button
                   type="button"
+                  disabled={validosListoCount === 0}
                   onClick={() => {
                     onBatchEnvio('Entregado', batchTransporte);
                     setBatchTransporte('');
                   }}
-                  className="px-3 py-2 rounded-xl text-xs font-medium bg-white hover:bg-zinc-50 border border-zinc-200 text-zinc-700 dark:bg-[#1B1B1F] dark:hover:bg-[#24242B] dark:border-[#2E2E35] dark:text-zinc-200 transition-colors"
+                  className="px-3 py-2 rounded-xl text-xs font-medium bg-white hover:bg-zinc-50 border border-zinc-200 text-zinc-700 dark:bg-[#1B1B1F] dark:hover:bg-[#24242B] dark:border-[#2E2E35] dark:text-zinc-200 transition-colors disabled:opacity-40"
                 >
                   Marcar Entregado
                 </button>
@@ -176,7 +236,7 @@ export function FloatingBatchBar({
         )}
 
         {batchPanel === 'enviar' && esAdmin && (
-          <div className="absolute bottom-full mb-2.5 left-1/2 -translate-x-1/2 w-80 bg-white dark:bg-[#18181D] text-[#111111] dark:text-[#F4F4F5] rounded-2xl border border-[#EAEAEA] dark:border-[#2E2E36] shadow-[0_12px_36px_rgba(0,0,0,0.12)] dark:shadow-[0_12px_36px_rgba(0,0,0,0.55)] p-4 space-y-3 text-xs">
+          <div className="absolute bottom-full mb-2.5 left-1/2 -translate-x-1/2 w-[min(20rem,calc(100vw-24px))] bg-white dark:bg-[#18181D] text-[#111111] dark:text-[#F4F4F5] rounded-2xl border border-[#EAEAEA] dark:border-[#2E2E36] shadow-[0_12px_36px_rgba(0,0,0,0.12)] dark:shadow-[0_12px_36px_rgba(0,0,0,0.55)] p-4 space-y-3 text-xs">
             <div className="flex items-center justify-between">
               <span className="font-semibold text-[#111111] dark:text-[#F4F4F5]">
                 Enviar {selectedCount} {selectedCount === 1 ? 'pedido' : 'pedidos'} a cuenta
@@ -225,6 +285,13 @@ export function FloatingBatchBar({
               </select>
             </div>
 
+            {cuentaSeleccionada && isDepositoRole(cuentaSeleccionada.rol) && (
+              <p className="text-[11px] text-zinc-500 dark:text-zinc-400 tabular-nums">
+                {validosParaDepositoCount} listos para enviar
+                {bloqueadosDepositoCount > 0 ? ` · ${bloqueadosDepositoCount} bloqueados (falta talle o detalle)` : ''}
+              </p>
+            )}
+
             <div className="grid grid-cols-2 gap-2">
               <div>
                 <label className="block text-[11px] text-zinc-500 dark:text-zinc-400 mb-1">Prioridad</label>
@@ -267,7 +334,7 @@ export function FloatingBatchBar({
                     type="button"
                     disabled={enviando}
                     onClick={() => void ejecutarEnvioLote(true)}
-                    className="flex-1 py-1.5 rounded-full bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-950 font-medium"
+                    className="flex-1 py-1.5 rounded-full bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-950 font-medium disabled:opacity-40"
                   >
                     Liberar igual
                   </button>
@@ -280,14 +347,18 @@ export function FloatingBatchBar({
                 onClick={() => void ejecutarEnvioLote(false)}
                 className="w-full py-2 rounded-full bg-zinc-900 hover:bg-zinc-800 text-white dark:bg-zinc-100 dark:hover:bg-white dark:text-zinc-950 font-medium disabled:opacity-40"
               >
-                {enviando ? 'Enviando...' : 'Enviar seleccionados'}
+                {enviando
+                  ? 'Enviando...'
+                  : selectedCount === 1
+                    ? 'Enviar seleccionado'
+                    : 'Enviar seleccionados'}
               </button>
             )}
           </div>
         )}
 
         {batchPanel === 'pago' && esAdmin && (
-          <div className="absolute bottom-full mb-2.5 left-1/2 -translate-x-1/2 w-80 bg-white dark:bg-[#18181D] text-[#111111] dark:text-[#F4F4F5] rounded-2xl border border-[#EAEAEA] dark:border-[#2E2E36] shadow-[0_12px_36px_rgba(0,0,0,0.12)] dark:shadow-[0_12px_36px_rgba(0,0,0,0.55)] p-4 space-y-3.5">
+          <div className="absolute bottom-full mb-2.5 left-1/2 -translate-x-1/2 w-[min(20rem,calc(100vw-24px))] bg-white dark:bg-[#18181D] text-[#111111] dark:text-[#F4F4F5] rounded-2xl border border-[#EAEAEA] dark:border-[#2E2E36] shadow-[0_12px_36px_rgba(0,0,0,0.12)] dark:shadow-[0_12px_36px_rgba(0,0,0,0.55)] p-4 space-y-3.5">
             <div className="flex items-center justify-between">
               <span className="text-xs font-semibold text-[#111111] dark:text-[#F4F4F5]">Pago y vendedor en lote</span>
               <button
@@ -300,14 +371,20 @@ export function FloatingBatchBar({
             </div>
 
             <div className="space-y-1.5">
-              <span className="text-[11px] text-zinc-400 dark:text-zinc-500 font-medium">Estado financiero (Administración)</span>
-              <button
-                type="button"
-                onClick={() => onBatchPago('Pagado')}
-                className="w-full px-3 py-2 rounded-xl text-xs font-medium bg-emerald-600 hover:bg-emerald-700 text-white transition-colors"
-              >
-                Marcar Pagado (Cobrado en mano)
-              </button>
+              <span className="text-[11px] text-zinc-400 dark:text-zinc-500 font-medium">Estado financiero</span>
+              {todosPagados ? (
+                <div className="px-3 py-2 rounded-xl text-xs font-medium bg-emerald-50 text-emerald-800 border border-emerald-200/70 dark:bg-emerald-500/10 dark:text-emerald-300 dark:border-emerald-500/25">
+                  Todos los seleccionados ya figuran pagados.
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => onBatchPago('Pagado')}
+                  className="w-full px-3 py-2 rounded-xl text-xs font-medium bg-emerald-600 hover:bg-emerald-700 text-white transition-colors"
+                >
+                  Marcar Pagado (Cobrado en mano)
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => onBatchPago('Falta pago')}
@@ -344,7 +421,7 @@ export function FloatingBatchBar({
         )}
 
         {batchPanel === 'exportar' && !esDeposito && (
-          <div className="absolute bottom-full mb-2.5 left-1/2 -translate-x-1/2 w-80 bg-white dark:bg-[#18181D] text-[#111111] dark:text-[#F4F4F5] rounded-2xl border border-[#EAEAEA] dark:border-[#2E2E36] shadow-[0_12px_36px_rgba(0,0,0,0.12)] dark:shadow-[0_12px_36px_rgba(0,0,0,0.55)] p-4 space-y-2.5">
+          <div className="absolute bottom-full mb-2.5 left-1/2 -translate-x-1/2 w-[min(20rem,calc(100vw-24px))] bg-white dark:bg-[#18181D] text-[#111111] dark:text-[#F4F4F5] rounded-2xl border border-[#EAEAEA] dark:border-[#2E2E36] shadow-[0_12px_36px_rgba(0,0,0,0.12)] dark:shadow-[0_12px_36px_rgba(0,0,0,0.55)] p-4 space-y-2.5">
             <div className="flex items-center justify-between pb-1">
               <span className="text-xs font-semibold text-[#111111] dark:text-[#F4F4F5]">
                 Exportar {pedidosSeleccionados.length}{' '}
@@ -367,7 +444,7 @@ export function FloatingBatchBar({
               >
                 <div className="text-xs font-semibold text-[#111111] dark:text-[#F4F4F5] flex items-center gap-1.5">
                   <FileSpreadsheet className="w-3.5 h-3.5 text-zinc-500 dark:text-zinc-400" strokeWidth={1.5} />
-                  Excel General (Seleccionados)
+                  Excel General ({pedidosSeleccionados.length === 1 ? 'Seleccionado' : 'Seleccionados'})
                 </div>
                 <p className="text-[11px] text-zinc-500 dark:text-zinc-400 mt-0.5">
                   Planilla oficial de 17 columnas solo con los tildados.
@@ -377,29 +454,31 @@ export function FloatingBatchBar({
 
             <button
               type="button"
+              disabled={listosPickingCount === 0}
               onClick={onExportPickingConsolidado}
-              className="w-full text-left px-3.5 py-2.5 rounded-xl border border-zinc-900 bg-zinc-900 text-white hover:bg-zinc-800 dark:border-[#34343D] dark:bg-[#22222A] dark:hover:bg-[#2A2A34] transition-colors"
+              className="w-full text-left px-3.5 py-2.5 rounded-xl border border-zinc-900 bg-zinc-900 text-white hover:bg-zinc-800 dark:border-[#34343D] dark:bg-[#22222A] dark:hover:bg-[#2A2A34] transition-colors disabled:opacity-40"
             >
               <div className="text-xs font-semibold flex items-center gap-1.5">
                 <Layers className="w-3.5 h-3.5 text-[#F4B6CE]" strokeWidth={1.5} />
                 Consolidado para Depósito (Picking)
               </div>
-              <p className="text-[11px] text-zinc-300 dark:text-zinc-400 mt-0.5">
-                Suma unidades totales por código + pestaña por cliente.
+              <p className="text-[11px] text-zinc-300 dark:text-zinc-400 mt-0.5 tabular-nums">
+                Incluirá {listosPickingCount} de {selectedCount} {selectedCount === 1 ? 'seleccionado' : 'seleccionados'} ·
+                suma por código.
               </p>
             </button>
           </div>
         )}
 
         {batchPanel === 'eliminar' && esAdmin && (
-          <div className="absolute bottom-full mb-2.5 right-0 w-72 bg-white dark:bg-[#18181D] text-[#111111] dark:text-[#F4F4F5] rounded-2xl border border-red-200/80 dark:border-red-500/30 shadow-[0_12px_36px_rgba(0,0,0,0.12)] dark:shadow-[0_12px_36px_rgba(0,0,0,0.55)] p-4 space-y-3">
+          <div className="absolute bottom-full mb-2.5 right-0 w-[min(18rem,calc(100vw-24px))] bg-white dark:bg-[#18181D] text-[#111111] dark:text-[#F4F4F5] rounded-2xl border border-red-200/80 dark:border-red-500/30 shadow-[0_12px_36px_rgba(0,0,0,0.12)] dark:shadow-[0_12px_36px_rgba(0,0,0,0.55)] p-4 space-y-3">
             <div className="text-xs font-semibold text-red-700 dark:text-red-400">
               ¿Eliminar {pedidosSeleccionados.length}{' '}
               {pedidosSeleccionados.length === 1 ? 'pedido' : 'pedidos'}?
             </div>
             <p className="text-[11px] text-zinc-500 dark:text-zinc-400 tabular-nums">
-              Total involucrado: <strong className="text-[#111111] dark:text-[#F4F4F5]">{formatARS(totalSeleccionado)}</strong>. Tendrás
-              6 segundos para deshacer si fue por error.
+              Total involucrado: <strong className="text-[#111111] dark:text-[#F4F4F5]">{formatARS(totalSeleccionado)}</strong>.
+              Tendrás 6 segundos para deshacer si fue por error.
             </p>
             <div className="flex items-center gap-2">
               <button
@@ -420,7 +499,7 @@ export function FloatingBatchBar({
           </div>
         )}
 
-        <div className="bg-zinc-900 dark:bg-[#1C1C22] text-white rounded-full shadow-lg dark:shadow-[0_12px_36px_rgba(0,0,0,0.55)] px-3.5 py-2 flex items-center gap-2 sm:gap-3 border border-zinc-800 dark:border-[#34343D]">
+        <div className="bg-zinc-900 dark:bg-[#1C1C22] text-white rounded-2xl sm:rounded-full shadow-lg dark:shadow-[0_12px_36px_rgba(0,0,0,0.55)] px-3 sm:px-3.5 py-2 flex flex-wrap sm:flex-nowrap items-center justify-center gap-1.5 sm:gap-2.5 border border-zinc-800 dark:border-[#34343D]">
           <div className="flex items-center gap-2 pl-1 whitespace-nowrap">
             <span className="inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full bg-[#F4B6CE] text-[#111111] text-[11px] font-bold tabular-nums">
               {selectedCount}
@@ -433,9 +512,9 @@ export function FloatingBatchBar({
             </span>
           </div>
 
-          <div className="h-4 w-px bg-zinc-700/80" />
+          <div className="hidden sm:block h-4 w-px bg-zinc-700/80" />
 
-          <div className="flex items-center gap-1">
+          <div className="flex flex-wrap items-center justify-center gap-1">
             <button
               type="button"
               onClick={() => setBatchPanel((prev) => (prev === 'estado' ? null : 'estado'))}
@@ -452,8 +531,9 @@ export function FloatingBatchBar({
             {esDeposito ? (
               <button
                 type="button"
+                disabled={listosPickingCount === 0}
                 onClick={onExportPickingConsolidado}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium text-zinc-200 hover:bg-zinc-800 dark:hover:bg-[#2A2A34] transition-colors"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium text-zinc-200 hover:bg-zinc-800 dark:hover:bg-[#2A2A34] transition-colors disabled:opacity-40"
               >
                 <Layers className="w-3.5 h-3.5 text-[#F4B6CE]" strokeWidth={1.5} />
                 <span>Picking Consolidado</span>
@@ -478,7 +558,7 @@ export function FloatingBatchBar({
                   </button>
                 )}
 
-                {esAdmin ? (
+                {esAdmin && (
                   <button
                     type="button"
                     onClick={() => setBatchPanel((prev) => (prev === 'pago' ? null : 'pago'))}
@@ -491,14 +571,6 @@ export function FloatingBatchBar({
                     <CreditCard className="w-3.5 h-3.5" strokeWidth={1.5} />
                     <span>Pago</span>
                   </button>
-                ) : (
-                  <span
-                    className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-full text-xs text-zinc-500 cursor-not-allowed"
-                    title="Edición de pagos en lote exclusiva para Administración"
-                  >
-                    <Lock className="w-3 h-3" strokeWidth={1.5} />
-                    <span className="hidden md:inline">Pago</span>
-                  </span>
                 )}
 
                 <button

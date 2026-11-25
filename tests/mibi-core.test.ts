@@ -32,7 +32,11 @@ import {
   generarBufferPickingConsolidado,
   generarBufferTableroMaestro
 } from '@/lib/excel-exporter';
-import { generarMensajeDespachoWhatsApp, generarMensajeWhatsApp } from '@/lib/whatsapp';
+import {
+  buildWhatsAppUrl,
+  generarMensajeDespachoWhatsApp,
+  generarMensajeWhatsApp
+} from '@/lib/whatsapp';
 import { ejecutarSuiteQA } from '@/lib/qa-suite';
 import { hashPassword, verifyPassword } from '@/lib/auth/password';
 import type { PedidoBase, SessionUser } from '@/lib/types';
@@ -53,6 +57,7 @@ vi.mock('@/lib/auth/session', () => ({
 
 import {
   batchUpdatePedidosDal,
+  ConflictError,
   crearPedidoDal,
   enviarPedidosACuentasDal,
   listarPedidosDal,
@@ -67,6 +72,7 @@ import {
   retirarAsignacionDal,
   softDeletePedidosDal
 } from '@/lib/dal/pedidos';
+import { cambiarRolUsuarioDal, toggleActivoUsuarioDal } from '@/lib/dal/usuarios';
 import {
   crearProductoCatalogoDal,
   customRecordToProductoCatalogo,
@@ -1102,5 +1108,153 @@ describe('MIBI Core — Catálogo, Centavos, Excel, Seguridad y RBAC', () => {
       new Request('http://localhost/api/export/tablero', { method: 'POST', body: '{}' }) as unknown as NextRequest
     );
     expect(resTableroVentas.status).toBe(403);
+  });
+
+  // 40-42: Cirugía 360 (WhatsApp URL, máquina de estados coherente y anti-autobloqueo ADMIN)
+  it('40. buildWhatsAppUrl normaliza teléfonos argentinos y descarta inválidos', () => {
+    const uLocal = buildWhatsAppUrl('11-5606-9384', 'Hola Mibi');
+    expect(uLocal).toBe('https://wa.me/5491156069384?text=Hola%20Mibi');
+
+    const uCero = buildWhatsAppUrl('011 5606 9384', 'Consulta');
+    expect(uCero).toBe('https://wa.me/5491156069384?text=Consulta');
+
+    const uMas549 = buildWhatsAppUrl('+54 9 11 5606-9384', 'Guía');
+    expect(uMas549).toBe('https://wa.me/5491156069384?text=Gu%C3%ADa');
+
+    expect(buildWhatsAppUrl('sin tel', 'Hola')).toBeNull();
+    expect(buildWhatsAppUrl('11-5606-9384', '   ')).toBeNull();
+  });
+
+  it('41. Máquina de estados coherente en servidor (armado/envío/fechas, cheques 100%, bloqueo y conflicto)', async () => {
+    mockSession = {
+      userId: '00000000-0000-4000-8000-000000000001',
+      username: 'admin',
+      nombre: 'Administración',
+      rol: 'ADMIN',
+      tokenVersion: 1
+    };
+    await reiniciarSistemaDal();
+
+    const dino = CATALOGO_BY_CODIGO.get('6510')!;
+    const monster = CATALOGO_BY_CODIGO.get('6502')!;
+
+    // Bloqueo duro si faltantesVariante > 0
+    const pedPendTalle = await crearPedidoDal({
+      cliente: 'Bloqueo Talle',
+      vendedor: 'Juancho',
+      whatsapp: '',
+      fechaPedido: getTodayISO(),
+      despachoPrevisto: addDaysISO(getTodayISO(), 5),
+      observaciones: '',
+      descuentoPorc: 0,
+      medioPago: 'Sin pagar',
+      montoAbonado: 0,
+      montoCheque: 0,
+      fechaRecepcionCheque: '',
+      fechaAcreditacionCheque: '',
+      detalleCheque: '',
+      lineas: [resolverLinea(monster, 3, '')]
+    });
+
+    await expect(
+      patchPedidoDal(pedPendTalle.id, { estadoEnvio: 'Despachado' }, 'Intento ilegal')
+    ).rejects.toThrow();
+    await expect(
+      patchPedidoDal(pedPendTalle.id, { estadoEnvio: 'Entregado' }, 'Intento ilegal')
+    ).rejects.toThrow();
+    await expect(
+      patchPedidoDal(pedPendTalle.id, { estadoArmado: 'Listo' }, 'Intento ilegal')
+    ).rejects.toThrow();
+
+    // Pedido completo: Despachado promueve Por armar -> Listo y estampa fechaDespacho; retroceso limpia fechas
+    const hoy = getTodayISO();
+    const pedCompleto = await crearPedidoDal({
+      cliente: 'Estado Coherente',
+      vendedor: 'Juancho',
+      whatsapp: '11-5606-9384',
+      fechaPedido: hoy,
+      despachoPrevisto: addDaysISO(hoy, 5),
+      observaciones: '',
+      descuentoPorc: 0,
+      medioPago: 'Cheque',
+      montoAbonado: 0,
+      montoCheque: 2 * 9505 * 1.21,
+      fechaRecepcionCheque: hoy,
+      fechaAcreditacionCheque: addDaysISO(hoy, 30),
+      detalleCheque: 'Banco Nación',
+      lineas: [resolverLinea(dino, 2, '')]
+    });
+
+    expect(pedCompleto.estadoArmado).toBe('Por armar');
+
+    const desp = await patchPedidoDal(
+      pedCompleto.id,
+      { estadoEnvio: 'Despachado' },
+      'Despacho directo',
+      pedCompleto.version
+    );
+    expect(desp.estadoArmado).toBe('Listo');
+    expect(desp.fechaDespacho).toBe(hoy);
+    expect(desp.fechaEntrega ?? '').toBe('');
+
+    const entr = await patchPedidoDal(pedCompleto.id, { estadoEnvio: 'Entregado' }, 'Entrega', desp.version);
+    expect(entr.fechaDespacho).toBe(hoy);
+    expect(entr.fechaEntrega).toBe(hoy);
+
+    const vueltoDesp = await patchPedidoDal(
+      pedCompleto.id,
+      { estadoEnvio: 'Despachado' },
+      'Corrección entrega',
+      entr.version
+    );
+    expect(vueltoDesp.fechaEntrega).toBe('');
+    expect(vueltoDesp.fechaDespacho).toBe(hoy);
+
+    const vueltoPend = await patchPedidoDal(
+      pedCompleto.id,
+      { estadoEnvio: 'Pendiente' },
+      'Corrección envío',
+      vueltoDesp.version
+    );
+    expect(vueltoPend.fechaDespacho).toBe('');
+    expect(vueltoPend.fechaEntrega).toBe('');
+
+    // Cambiar fechaRecepcionCheque recalcula +30 días automáticamente
+    const fechaRec = '2026-06-01';
+    const cheqRec = await patchPedidoDal(
+      pedCompleto.id,
+      { fechaRecepcionCheque: fechaRec },
+      'Cambio fecha recepción'
+    );
+    expect(cheqRec.fechaAcreditacionCheque).toBe('2026-07-01');
+
+    // Abonar 100% en pedido con Cheque pasa automáticamente a Pagado y chequeAcreditado = true
+    const pagadoCheque = await patchPedidoDal(
+      pedCompleto.id,
+      { montoAbonado: cheqRec.totalFacturado },
+      'Abonó 100%'
+    );
+    expect(pagadoCheque.estadoPago).toBe('Pagado');
+    expect(pagadoCheque.chequeAcreditado).toBe(true);
+    expect(pagadoCheque.montoCheque).toBe(0);
+
+    // Detección de conflicto de concurrencia cuando expectedVersion no coincide
+    await expect(
+      patchPedidoDal(pedCompleto.id, { transporte: 'Andreani' }, 'Versión vieja', vueltoPend.version)
+    ).rejects.toBeInstanceOf(ConflictError);
+  });
+
+  it('42. Seguridad de equipo: ADMIN no puede desactivarse ni quitarse su propio rol ADMIN', async () => {
+    const ADMIN_ID = '00000000-0000-4000-8000-000000000001';
+    mockSession = {
+      userId: ADMIN_ID,
+      username: 'admin',
+      nombre: 'Administración',
+      rol: 'ADMIN',
+      tokenVersion: 1
+    };
+
+    await expect(toggleActivoUsuarioDal(ADMIN_ID, false)).rejects.toThrow();
+    await expect(cambiarRolUsuarioDal(ADMIN_ID, 'VENTAS')).rejects.toThrow();
   });
 });

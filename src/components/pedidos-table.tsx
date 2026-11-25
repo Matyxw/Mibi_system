@@ -1,7 +1,7 @@
 'use client';
 
-import React, { useEffect, useRef } from 'react';
-import { ChevronRight } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { Download } from 'lucide-react';
 import {
   esDespachoAtrasado,
   formatARS,
@@ -9,7 +9,7 @@ import {
   formatShortDate,
   getDiasParaAcreditacionCheque
 } from '@/lib/finanzas';
-import { isDepositoRole, type Pedido } from '@/lib/types';
+import { isDepositoRole, type DrawerFocusTarget, type Pedido } from '@/lib/types';
 import { StatusPill } from './status-pill';
 
 interface PedidosTableProps {
@@ -19,10 +19,14 @@ interface PedidosTableProps {
   seleccionParcialVisible: boolean;
   esAdmin: boolean;
   esDeposito: boolean;
+  hayFiltrosActivos: boolean;
+  pendingKeys: ReadonlySet<string>;
+  onLimpiarFiltros: () => void;
   onToggleSelectAll: () => void;
   onToggleSelectRow: (id: string, shiftKey: boolean) => void;
-  onOpenDrawer: (id: string) => void;
-  onConfirmarAcreditacion: (pedido: Pedido) => void;
+  onOpenDrawer: (id: string, focusTarget?: DrawerFocusTarget) => void;
+  onQuickArmado: (pedido: Pedido, nuevoEstado: 'En armado' | 'Listo') => Promise<void>;
+  onConfirmarAcreditacion: (pedido: Pedido) => Promise<void>;
   onExportarHojaDeposito: (pedido: Pedido) => void;
 }
 
@@ -33,19 +37,48 @@ export function PedidosTable({
   seleccionParcialVisible,
   esAdmin,
   esDeposito,
+  hayFiltrosActivos,
+  pendingKeys,
+  onLimpiarFiltros,
   onToggleSelectAll,
   onToggleSelectRow,
   onOpenDrawer,
+  onQuickArmado,
   onConfirmarAcreditacion,
   onExportarHojaDeposito
 }: PedidosTableProps): React.JSX.Element {
   const headerCheckboxRef = useRef<HTMLInputElement | null>(null);
+  const [confirmAcreditarId, setConfirmAcreditarId] = useState<string | null>(null);
 
   useEffect(() => {
     if (headerCheckboxRef.current) {
       headerCheckboxRef.current.indeterminate = seleccionParcialVisible;
     }
   }, [seleccionParcialVisible]);
+
+  useEffect(() => {
+    if (!confirmAcreditarId) return;
+    const t = window.setTimeout(() => {
+      setConfirmAcreditarId((curr) => (curr === confirmAcreditarId ? null : curr));
+    }, 4000);
+    return () => window.clearTimeout(t);
+  }, [confirmAcreditarId]);
+
+  const HojaIconButton = ({ pedido }: { pedido: Pedido }): React.JSX.Element => {
+    const downloading = pendingKeys.has(`hoja:${pedido.id}`);
+    return (
+      <button
+        type="button"
+        disabled={downloading}
+        onClick={() => onExportarHojaDeposito(pedido)}
+        title="Descargar Hoja depósito (.xlsx)"
+        aria-label={`Descargar Hoja depósito #${pedido.numeroPedido}`}
+        className="p-1.5 rounded-full bg-white text-zinc-600 border border-zinc-200 hover:bg-zinc-50 hover:text-[#111111] dark:bg-[#1B1B1F] dark:text-zinc-300 dark:border-[#2E2E35] dark:hover:bg-[#24242B] dark:hover:text-[#F4F4F5] transition-colors disabled:opacity-40"
+      >
+        <Download className="w-3.5 h-3.5" strokeWidth={1.5} />
+      </button>
+    );
+  };
 
   return (
     <div className="bg-white dark:bg-[#141417] rounded-2xl border border-[#EAEAEA] dark:border-[#26262B] shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden">
@@ -85,13 +118,25 @@ export function PedidosTable({
           <tbody className="divide-y divide-zinc-200/60 dark:divide-[#26262B]/80 text-sm">
             {pedidosFiltrados.length === 0 ? (
               <tr>
-                <td colSpan={7} className="py-14 text-center text-sm text-zinc-400 dark:text-zinc-500">
-                  No hay pedidos con ese filtro.
+                <td colSpan={7} className="py-14 text-center space-y-3">
+                  <div className="text-sm text-zinc-400 dark:text-zinc-500">
+                    No hay pedidos con ese filtro.
+                  </div>
+                  {hayFiltrosActivos && (
+                    <button
+                      type="button"
+                      onClick={onLimpiarFiltros}
+                      className="inline-flex items-center px-3.5 py-1.5 rounded-full text-xs font-medium bg-white border border-zinc-200 text-zinc-700 hover:bg-zinc-50 dark:bg-[#1B1B1F] dark:border-[#2E2E35] dark:text-zinc-200 dark:hover:bg-[#24242B] transition-colors"
+                    >
+                      Limpiar filtros
+                    </button>
+                  )}
                 </td>
               </tr>
             ) : (
               pedidosFiltrados.map((p) => {
                 const faltaDefinir = p.faltantesVariante > 0;
+                const sinLineas = p.lineas.length === 0;
                 const esChequePendiente = p.medioPago === 'Cheque' && !p.chequeAcreditado;
                 const diasCheque = getDiasParaAcreditacionCheque(p);
                 const chequeAlCobro = esChequePendiente && diasCheque !== null && diasCheque <= 0;
@@ -106,6 +151,10 @@ export function PedidosTable({
                 const notaDeposito = Array.from(
                   new Set(asigsDeposito.map((a) => a.notaEnvio.trim()).filter(Boolean))
                 ).join(' · ');
+
+                const busyArmado = pendingKeys.has(`armado:${p.id}`);
+                const busyAcreditar = pendingKeys.has(`acreditar:${p.id}`);
+                const busyHoja = pendingKeys.has(`hoja:${p.id}`);
 
                 return (
                   <tr
@@ -190,8 +239,8 @@ export function PedidosTable({
                           </div>
                         </td>
 
-                        <td className="py-3.5 px-3 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
-                          <div className="flex flex-col items-start gap-1.5">
+                        <td className="py-3.5 px-3 whitespace-nowrap">
+                          <div className="flex flex-col items-start gap-1">
                             {p.estadoPago === 'Pagado' && <StatusPill tone="green">Pagado</StatusPill>}
                             {p.estadoPago === 'Pendiente' && (
                               <StatusPill tone={chequeAlCobro ? 'red' : 'amber'}>
@@ -203,16 +252,6 @@ export function PedidosTable({
                               </StatusPill>
                             )}
                             {p.estadoPago === 'Falta pago' && <StatusPill tone="red">Falta pago</StatusPill>}
-
-                            {esChequePendiente && esAdmin && (
-                              <button
-                                type="button"
-                                onClick={() => onConfirmarAcreditacion(p)}
-                                className="text-[11px] font-medium text-emerald-700 hover:text-emerald-800 dark:text-emerald-400 dark:hover:text-emerald-300 underline underline-offset-2"
-                              >
-                                Confirmar plata acreditada
-                              </button>
-                            )}
                           </div>
                         </td>
                       </>
@@ -266,32 +305,136 @@ export function PedidosTable({
                       className="py-3.5 pl-3 pr-6 text-right whitespace-nowrap"
                       onClick={(e) => e.stopPropagation()}
                     >
-                      <div className="inline-flex items-center gap-1.5">
-                        {faltaDefinir && !esDeposito ? (
+                      <div className="inline-flex items-center justify-end gap-1.5">
+                        {esDeposito ? (
+                          p.estadoArmado === 'Por armar' && !faltaDefinir ? (
+                            <>
+                              <button
+                                type="button"
+                                disabled={busyArmado}
+                                onClick={() => void onQuickArmado(p, 'En armado')}
+                                className="px-3.5 py-1.5 rounded-full text-xs font-medium bg-zinc-900 text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-white transition-colors disabled:opacity-40 min-h-[32px]"
+                              >
+                                {busyArmado ? 'Guardando...' : 'Empezar'}
+                              </button>
+                              {!sinLineas && <HojaIconButton pedido={p} />}
+                            </>
+                          ) : p.estadoArmado === 'En armado' && !faltaDefinir ? (
+                            <>
+                              <button
+                                type="button"
+                                disabled={busyArmado}
+                                onClick={() => void onQuickArmado(p, 'Listo')}
+                                className="px-3.5 py-1.5 rounded-full text-xs font-medium bg-emerald-600 text-white hover:bg-emerald-700 transition-colors disabled:opacity-40 min-h-[32px]"
+                              >
+                                {busyArmado ? 'Guardando...' : 'Marcar listo'}
+                              </button>
+                              {!sinLineas && <HojaIconButton pedido={p} />}
+                            </>
+                          ) : p.estadoArmado === 'Listo' && p.estadoEnvio === 'Pendiente' ? (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => onOpenDrawer(p.id, 'transporte')}
+                                className="px-3.5 py-1.5 rounded-full text-xs font-medium bg-white text-[#111111] border border-zinc-200 hover:bg-zinc-50 dark:bg-[#1B1B1F] dark:text-[#F4F4F5] dark:border-[#2E2E35] dark:hover:bg-[#24242B] transition-colors min-h-[32px]"
+                              >
+                                Despachar
+                              </button>
+                              {!sinLineas && <HojaIconButton pedido={p} />}
+                            </>
+                          ) : !sinLineas && !faltaDefinir ? (
+                            <button
+                              type="button"
+                              disabled={busyHoja}
+                              onClick={() => onExportarHojaDeposito(p)}
+                              className="px-3 py-1.5 rounded-full text-xs font-medium bg-white text-zinc-700 border border-zinc-200 hover:bg-zinc-50 dark:bg-[#1B1B1F] dark:text-zinc-200 dark:border-[#2E2E35] dark:hover:bg-[#24242B] transition-colors disabled:opacity-40"
+                            >
+                              Hoja depósito
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => onOpenDrawer(p.id)}
+                              className="px-3 py-1.5 rounded-full text-xs font-medium text-zinc-500 hover:text-[#111111] dark:text-zinc-400 dark:hover:text-[#F4F4F5] transition-colors"
+                            >
+                              Ver detalle
+                            </button>
+                          )
+                        ) : faltaDefinir ? (
+                          <button
+                            type="button"
+                            onClick={() => onOpenDrawer(p.id, 'talles')}
+                            className="px-3 py-1.5 rounded-full text-xs font-medium bg-red-50 text-red-700 border border-red-200/70 hover:bg-red-100/70 dark:bg-red-500/[0.12] dark:text-red-300 dark:border-red-500/25 dark:hover:bg-red-500/20 transition-colors"
+                          >
+                            Definir talle
+                          </button>
+                        ) : esAdmin && chequeAlCobro ? (
+                          confirmAcreditarId === p.id ? (
+                            <div className="inline-flex items-center gap-1 rounded-full bg-emerald-50 border border-emerald-200 dark:bg-emerald-500/15 dark:border-emerald-500/30 px-2.5 py-1 text-[11px]">
+                              <span className="text-emerald-800 dark:text-emerald-200 font-medium mr-0.5">
+                                ¿Acreditar?
+                              </span>
+                              <button
+                                type="button"
+                                disabled={busyAcreditar}
+                                onClick={() => {
+                                  setConfirmAcreditarId(null);
+                                  void onConfirmarAcreditacion(p);
+                                }}
+                                className="px-2 py-0.5 rounded-full bg-emerald-600 text-white font-semibold hover:bg-emerald-700 disabled:opacity-40"
+                              >
+                                Sí
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setConfirmAcreditarId(null)}
+                                className="px-1.5 py-0.5 rounded-full text-zinc-600 hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-white"
+                              >
+                                No
+                              </button>
+                            </div>
+                          ) : (
+                            <>
+                              <button
+                                type="button"
+                                disabled={busyAcreditar}
+                                onClick={() => setConfirmAcreditarId(p.id)}
+                                className="px-3 py-1.5 rounded-full text-xs font-medium bg-emerald-50 text-emerald-700 border border-emerald-200/70 hover:bg-emerald-100/80 dark:bg-emerald-500/[0.12] dark:text-emerald-300 dark:border-emerald-500/25 dark:hover:bg-emerald-500/20 transition-colors disabled:opacity-40"
+                              >
+                                {busyAcreditar ? 'Guardando...' : 'Acreditar cheque'}
+                              </button>
+                              {!sinLineas && <HojaIconButton pedido={p} />}
+                            </>
+                          )
+                        ) : sinLineas ? (
                           <button
                             type="button"
                             onClick={() => onOpenDrawer(p.id)}
-                            className="px-3 py-1.5 rounded-full text-xs font-medium bg-red-50 text-red-700 border border-red-200/70 hover:bg-red-100/70 dark:bg-red-500/[0.12] dark:text-red-300 dark:border-red-500/25 dark:hover:bg-red-500/20 transition-colors"
+                            className="px-3 py-1.5 rounded-full text-xs font-medium text-zinc-500 hover:text-[#111111] dark:text-zinc-400 dark:hover:text-[#F4F4F5] transition-colors"
                           >
-                            Completar
+                            Ver detalle
                           </button>
+                        ) : esAdmin && asigsDeposito.length === 0 && p.estadoEnvio === 'Pendiente' ? (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => onOpenDrawer(p.id, 'derivacion')}
+                              className="px-3 py-1.5 rounded-full text-xs font-medium bg-zinc-900 text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-white transition-colors"
+                            >
+                              Enviar a depósito
+                            </button>
+                            <HojaIconButton pedido={p} />
+                          </>
                         ) : (
                           <button
                             type="button"
+                            disabled={busyHoja}
                             onClick={() => onExportarHojaDeposito(p)}
-                            className="px-3 py-1.5 rounded-full text-xs font-medium bg-white text-zinc-700 border border-zinc-200 hover:bg-zinc-50 dark:bg-[#1B1B1F] dark:text-zinc-200 dark:border-[#2E2E35] dark:hover:bg-[#24242B] transition-colors"
+                            className="px-3 py-1.5 rounded-full text-xs font-medium bg-white text-zinc-700 border border-zinc-200 hover:bg-zinc-50 dark:bg-[#1B1B1F] dark:text-zinc-200 dark:border-[#2E2E35] dark:hover:bg-[#24242B] transition-colors disabled:opacity-40"
                           >
                             Hoja depósito
                           </button>
                         )}
-                        <button
-                          type="button"
-                          onClick={() => onOpenDrawer(p.id)}
-                          className="p-1.5 rounded-full text-zinc-400 hover:text-zinc-800 hover:bg-zinc-100 dark:hover:text-[#F4F4F5] dark:hover:bg-[#24242B] transition-colors"
-                          aria-label="Ver detalle"
-                        >
-                          <ChevronRight className="w-4 h-4" strokeWidth={1.5} />
-                        </button>
                       </div>
                     </td>
                   </tr>

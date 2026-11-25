@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { AuthError, requireAdmin, requireSession } from '@/lib/dal/auth';
 import {
   batchUpdatePedidosDal,
+  ConflictError,
   crearPedidoDal,
   enviarPedidosACuentasDal,
   importarPedidosHistoricosDal,
@@ -64,6 +65,7 @@ const CrearPedidoSchema = z.object({
 const PatchPedidoSchema = z.object({
   pedidoId: z.string().min(1),
   motivo: z.string().trim().min(1).max(300),
+  expectedVersion: z.number().int().positive().optional(),
   patch: z.object({
     cliente: z.string().trim().min(1).max(200).optional(),
     vendedor: z.string().trim().min(1).max(80).optional(),
@@ -128,6 +130,7 @@ export interface ActionResponse<T> {
   ok: boolean;
   data?: T;
   error?: string;
+  conflict?: boolean;
 }
 
 const toActionError = (err: unknown, fallback: string): string => {
@@ -173,10 +176,18 @@ export async function patchPedidoAction(
       return { ok: false, error: parsed.error.issues[0]?.message ?? 'Datos inválidos al actualizar.' };
     }
     const patchInput: PatchPedidoInput = parsed.data.patch;
-    const updated = await patchPedidoDal(parsed.data.pedidoId, patchInput, parsed.data.motivo);
+    const updated = await patchPedidoDal(
+      parsed.data.pedidoId,
+      patchInput,
+      parsed.data.motivo,
+      parsed.data.expectedVersion
+    );
     revalidatePath('/');
     return { ok: true, data: updated };
   } catch (err) {
+    if (err instanceof ConflictError) {
+      return { ok: false, conflict: true, error: err.message };
+    }
     return { ok: false, error: toActionError(err, 'No se pudo actualizar el pedido.') };
   }
 }

@@ -276,6 +276,7 @@ export function CatalogoModal({
                   min={0}
                   step="0.01"
                   value={precioNetoStr}
+                  onWheel={(e) => e.currentTarget.blur()}
                   onChange={(e) => setPrecioNetoStr(e.target.value)}
                   placeholder="0.00"
                   className="w-full px-3 py-2 bg-white dark:bg-[#141417] dark:text-[#F4F4F5] border border-zinc-200 dark:border-[#2E2E35] rounded-xl tabular-nums placeholder:text-zinc-400 dark:placeholder:text-zinc-500"

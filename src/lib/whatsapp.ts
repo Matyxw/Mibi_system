@@ -37,3 +37,26 @@ export const generarMensajeDespachoWhatsApp = (
   if (!transporte || !guia) return '';
   return `¡Hola ${pedido.cliente}! Tu pedido #${pedido.numeroPedido} de Mibi® ya fue despachado por ${transporte}. Guía de seguimiento: ${guia}`;
 };
+
+export const buildWhatsAppUrl = (telefonoRaw: string, mensaje: string): string | null => {
+  const texto = mensaje.trim();
+  if (!texto) return null;
+
+  let digits = telefonoRaw.replace(/\D+/g, '');
+  if (!digits) return null;
+
+  if (digits.startsWith('00')) {
+    digits = digits.slice(2);
+  } else if (digits.startsWith('0')) {
+    digits = digits.slice(1);
+  }
+
+  if (digits.length === 10) {
+    digits = `549${digits}`;
+  } else if (digits.length === 12 && digits.startsWith('54') && !digits.startsWith('549')) {
+    digits = `549${digits.slice(2)}`;
+  }
+
+  if (digits.length < 10) return null;
+  return `https://wa.me/${digits}?text=${encodeURIComponent(texto)}`;
+};
