@@ -13,6 +13,7 @@ export async function middleware(request: NextRequest): Promise<NextResponse> {
 
   if (
     pathname.startsWith('/_next/') ||
+    pathname.startsWith('/_vercel/') ||
     pathname === '/favicon.ico' ||
     pathname === '/favicon.png' ||
     pathname === '/favicon.svg' ||
