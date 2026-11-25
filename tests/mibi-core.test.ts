@@ -580,4 +580,37 @@ describe('MIBI Core — Catálogo, Centavos, Excel, Seguridad y RBAC', () => {
     });
     expect(creado.subtotalNeto).toBe(2 * 9505);
   });
+
+  it('36. DAL: permite editar cliente y whatsapp desde el panel de pedido sin alterar importes ni perder historial', async () => {
+    await reiniciarSistemaDal();
+    const dino = CATALOGO_BY_CODIGO.get('6510')!;
+    const creado = await crearPedidoDal({
+      cliente: 'Cliente Original',
+      vendedor: 'Juancho',
+      whatsapp: '11-1111-1111',
+      fechaPedido: getTodayISO(),
+      despachoPrevisto: addDaysISO(getTodayISO(), 5),
+      observaciones: '',
+      descuentoPorc: 0,
+      medioPago: 'Sin pagar',
+      montoAbonado: 0,
+      montoCheque: 0,
+      fechaRecepcionCheque: '',
+      fechaAcreditacionCheque: '',
+      detalleCheque: '',
+      lineas: [resolverLinea(dino, 2, '')]
+    });
+
+    const editado = await patchPedidoDal(
+      creado.id,
+      { cliente: '  Juguetería Nueva SRL  ', whatsapp: '11-5606-9384' },
+      'Actualizó cliente: Cliente Original → Juguetería Nueva SRL'
+    );
+
+    expect(editado.cliente).toBe('Juguetería Nueva SRL');
+    expect(editado.whatsapp).toBe('11-5606-9384');
+    expect(editado.totalFacturado).toBe(creado.totalFacturado);
+    expect(editado.version).toBe(2);
+    expect(editado.historial[0]?.accion).toContain('Juguetería Nueva SRL');
+  });
 });

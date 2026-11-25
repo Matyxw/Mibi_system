@@ -10,6 +10,8 @@ import { MibiLogo } from './mibi-logo';
 import { StatusPill } from './status-pill';
 
 interface DrawerDraft {
+  cliente: string;
+  whatsapp: string;
   descuentoPorc: string;
   montoAbonado: string;
   fechaAcreditacionCheque: string;
@@ -56,6 +58,8 @@ export function PedidoDrawer({
   const [confirmEliminar, setConfirmEliminar] = useState<boolean>(false);
   const [resolucionesManual, setResolucionesManual] = useState<Record<string, { q0: string; q1: string }>>({});
   const [draft, setDraft] = useState<DrawerDraft>({
+    cliente: pedido.cliente,
+    whatsapp: pedido.whatsapp,
     descuentoPorc: String(pedido.descuentoPorc),
     montoAbonado: String(pedido.montoAbonado),
     fechaAcreditacionCheque: pedido.fechaAcreditacionCheque,
@@ -73,6 +77,8 @@ export function PedidoDrawer({
 
   useEffect(() => {
     setDraft({
+      cliente: pedido.cliente,
+      whatsapp: pedido.whatsapp,
       descuentoPorc: String(pedido.descuentoPorc),
       montoAbonado: String(pedido.montoAbonado),
       fechaAcreditacionCheque: pedido.fechaAcreditacionCheque,
@@ -84,6 +90,8 @@ export function PedidoDrawer({
   }, [
     pedido.id,
     pedido.version,
+    pedido.cliente,
+    pedido.whatsapp,
     pedido.descuentoPorc,
     pedido.montoAbonado,
     pedido.fechaAcreditacionCheque,
@@ -92,6 +100,28 @@ export function PedidoDrawer({
     pedido.nroSeguimiento,
     pedido.observaciones
   ]);
+
+  const commitCliente = (): void => {
+    const val = draft.cliente.trim();
+    if (!val) {
+      setDraft((prev) => ({ ...prev, cliente: pedido.cliente }));
+      onNotify('El nombre del cliente no puede quedar vacío.', 'amber');
+      return;
+    }
+    if (val !== pedido.cliente) {
+      const motivo = `Actualizó cliente: ${pedido.cliente} → ${val}`.slice(0, 300);
+      void onPatch(pedido.id, { cliente: val }, motivo).then(() => {
+        onNotify('Cliente actualizado.', 'green');
+      });
+    }
+  };
+
+  const commitWhatsapp = (): void => {
+    const val = draft.whatsapp.trim();
+    if (val !== pedido.whatsapp) {
+      void onPatch(pedido.id, { whatsapp: val }, `Actualizó WhatsApp: ${val || 'vacío'}`);
+    }
+  };
 
   return (
     <div
@@ -314,6 +344,50 @@ export function PedidoDrawer({
               )}
 
               <div className="space-y-3">
+                <h3 className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">
+                  Datos del cliente
+                </h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                  <div>
+                    <label htmlFor={`drawer-cliente-${pedido.id}`} className="block text-[11px] text-zinc-500 mb-1">
+                      Cliente / Comercio
+                    </label>
+                    <input
+                      id={`drawer-cliente-${pedido.id}`}
+                      type="text"
+                      maxLength={200}
+                      value={draft.cliente}
+                      onChange={(e) => setDraft((prev) => ({ ...prev, cliente: e.target.value }))}
+                      onBlur={commitCliente}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') e.currentTarget.blur();
+                      }}
+                      placeholder="Nombre del cliente o local"
+                      className="w-full px-3 py-2 bg-white border border-zinc-200 rounded-xl focus:outline-none focus:border-zinc-900"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor={`drawer-whatsapp-${pedido.id}`} className="block text-[11px] text-zinc-500 mb-1">
+                      WhatsApp
+                    </label>
+                    <input
+                      id={`drawer-whatsapp-${pedido.id}`}
+                      type="text"
+                      maxLength={80}
+                      value={draft.whatsapp}
+                      onChange={(e) => setDraft((prev) => ({ ...prev, whatsapp: e.target.value }))}
+                      onBlur={commitWhatsapp}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') e.currentTarget.blur();
+                      }}
+                      placeholder="Ej. 11-5555-1234"
+                      className="w-full px-3 py-2 bg-white border border-zinc-200 rounded-xl tabular-nums focus:outline-none focus:border-zinc-900"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="pt-5 border-t border-zinc-200/70 space-y-3">
                 <div className="flex items-center justify-between">
                   <h3 className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">
                     Pagos y liquidación
