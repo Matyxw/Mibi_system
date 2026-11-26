@@ -17,6 +17,7 @@ import {
   toCents
 } from '@/lib/finanzas';
 import {
+  aplicarLineaAlBorrador,
   aplicarResolucionLinea,
   crearLineasEjemploLista006,
   importarPlanillaGeneral,
@@ -25,7 +26,8 @@ import {
   parsearExcelLista006,
   parsearFechaExcel,
   parsearMontoArgentino,
-  resolverLinea
+  resolverLinea,
+  sugerirProductosCercanos
 } from '@/lib/excel-parser';
 import {
   generarBufferHojaDeposito,
@@ -1256,5 +1258,147 @@ describe('MIBI Core — Catálogo, Centavos, Excel, Seguridad y RBAC', () => {
 
     await expect(toggleActivoUsuarioDal(ADMIN_ID, false)).rejects.toThrow();
     await expect(cambiarRolUsuarioDal(ADMIN_ID, 'VENTAS')).rejects.toThrow();
+  });
+
+  // 43-48: Resolución guiada de alertas Excel & anti-typo & inmunidad contable
+  it('43. Alerta enriquecida CODIGO_DESCONOCIDO extrae metadatos y nunca auto-crea ni factura el producto', () => {
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet([
+      ['MIBI LISTA N° 006'],
+      ['Codigos', '', 'Producto', 'Precio', 'Cantidades pedidas', '', 'Talles/Colores'],
+      ['9999', '', 'Piluso Tiburón Azul', 15000, 6, '', '3 T1, 3 T2']
+    ]);
+    XLSX.utils.book_append_sheet(wb, ws, 'Lista');
+    const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer;
+    const res = parsearExcelLista006(buf, 'desconocido.xlsx');
+
+    expect(res.ok).toBe(true);
+    expect(res.lineas).toHaveLength(0);
+    expect(res.advertencias).toHaveLength(1);
+    const adv = res.advertencias[0]!;
+    expect(adv.tipo).toBe('CODIGO_DESCONOCIDO');
+    expect(adv.codigosDetectados).toEqual(['9999']);
+    expect(adv.descripcionExcel).toBe('Piluso Tiburón Azul');
+    expect(adv.precioExcelReferencia).toBe(15000);
+    expect(adv.cantidadDetectada).toBe(6);
+    expect(adv.notaDetectada).toBe('3 T1, 3 T2');
+    expect(adv.productoExistenteIdGrupo).toBeNull();
+  });
+
+  it('44. Par desconocido A+B detecta ambos códigos en codigosDetectados', () => {
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet([
+      ['MIBI LISTA N° 006'],
+      ['Codigos', '', 'Producto', 'Precio', 'Cantidades pedidas', '', 'Talles/Colores'],
+      ['9801', '9802', 'Piluso Doble', 18000, 4, '', '2 y 2']
+    ]);
+    XLSX.utils.book_append_sheet(wb, ws, 'Hoja1');
+    const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer;
+    const res = parsearExcelLista006(buf, 'par_desconocido.xlsx');
+
+    expect(res.ok).toBe(true);
+    expect(res.advertencias).toHaveLength(1);
+    expect(res.advertencias[0]?.codigosDetectados).toEqual(['9801', '9802']);
+    expect(res.advertencias[0]?.codigo).toBe('9801/9802');
+    expect(res.advertencias[0]?.cantidadDetectada).toBe(4);
+  });
+
+  it('45. sugerirProductosCercanos detecta typos de código, nombres parecidos y devuelve [] sin coincidencia', () => {
+    const porCodigo = sugerirProductosCercanos('650X', '', CATALOGO_MIBI);
+    expect(porCodigo.length).toBeGreaterThanOrEqual(1);
+    expect(porCodigo.length).toBeLessThanOrEqual(3);
+    expect(porCodigo[0]?.motivo).toBe('Código parecido');
+
+    const porNombre = sugerirProductosCercanos('8888', 'Chaleco Shark', CATALOGO_MIBI);
+    expect(porNombre.length).toBeGreaterThanOrEqual(1);
+    expect(porNombre[0]?.idGrupo).toBe('6504-6505');
+    expect(porNombre[0]?.motivo).toBe('Nombre parecido');
+
+    const sinMatch = sugerirProductosCercanos('9999', 'Juguete Orbital X', CATALOGO_MIBI);
+    expect(sinMatch).toEqual([]);
+  });
+
+  it('46. CANTIDAD_INVALIDA registra valor crudo y productoExistenteIdGrupo si el código existe', () => {
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet([
+      ['MIBI LISTA N° 006'],
+      ['Codigos', '', 'Producto', 'Precio', 'Cantidades pedidas', '', 'Talles/Colores'],
+      ['6510', '', 'Antiparras Dino', 9505, 'abc', '', ''],
+      ['9998', '', 'Producto Desconocido', 1200, '2 doc', '', '']
+    ]);
+    XLSX.utils.book_append_sheet(wb, ws, 'Hoja1');
+    const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer;
+    const res = parsearExcelLista006(buf, 'cant_invalida.xlsx');
+
+    expect(res.ok).toBe(true);
+    expect(res.lineas).toHaveLength(0);
+    expect(res.advertencias).toHaveLength(2);
+
+    const aExist = res.advertencias[0]!;
+    expect(aExist.tipo).toBe('CANTIDAD_INVALIDA');
+    expect(aExist.cantidadDetectada).toBeNull();
+    expect(aExist.cantidadRaw).toBe('abc');
+    expect(aExist.productoExistenteIdGrupo).toBe('6510');
+
+    const aDesc = res.advertencias[1]!;
+    expect(aDesc.tipo).toBe('CANTIDAD_INVALIDA');
+    expect(aDesc.cantidadRaw).toBe('2 doc');
+    expect(aDesc.productoExistenteIdGrupo).toBeNull();
+  });
+
+  it('47. Inmunidad de precios y avisosPrecio: nunca factura con precio editado del Excel', () => {
+    const dino = CATALOGO_BY_CODIGO.get('6510')!;
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet([
+      ['MIBI LISTA N° 006'],
+      ['Codigos', '', 'Producto', 'Precio', 'Cantidades pedidas', '', 'Talles/Colores'],
+      ['6510', '', 'Antiparras Dino', 100, 2, '', ''],
+      ['6511', '', 'Antiparras Monster', CATALOGO_BY_CODIGO.get('6511')!.precioNeto, 1, '', '']
+    ]);
+    XLSX.utils.book_append_sheet(wb, ws, 'Lista');
+    const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer;
+    const res = parsearExcelLista006(buf, 'precio_editado.xlsx');
+
+    expect(res.ok).toBe(true);
+    expect(res.advertencias).toHaveLength(0);
+    expect(res.lineas).toHaveLength(2);
+    const lineaDino = res.lineas.find((l) => l.idGrupo === '6510')!;
+    expect(lineaDino.precioUnitarioNeto).toBe(dino.precioNeto);
+    expect(res.avisosPrecio).toHaveLength(1);
+    expect(res.avisosPrecio?.[0]).toEqual({
+      codigo: '6510',
+      nombreProducto: dino.nombre,
+      precioPlanilla: 100,
+      precioVigente: dino.precioNeto
+    });
+  });
+
+  it('48. aplicarLineaAlBorrador suma cantidades y protege desglose en productos multi-variante', () => {
+    const dino = CATALOGO_BY_CODIGO.get('6510')!;
+    const shark = CATALOGO_BY_CODIGO.get('6504')!;
+
+    // Caso 1: variante única fusiona cantidad
+    const baseUnico = aplicarLineaAlBorrador([], dino, 2, '');
+    const fusionUnico = aplicarLineaAlBorrador(baseUnico, dino, 3, '');
+    expect(fusionUnico).toHaveLength(1);
+    expect(fusionUnico[0]?.cantidadTotal).toBe(5);
+    expect(fusionUnico[0]?.estado).toBe('OK');
+
+    // Caso 2: multi-variante ya OK al sumar cantidad sin nota vuelve seguro a REQUIERE_REVISION
+    const baseShark = aplicarLineaAlBorrador([], shark, 2, 'de 1 a 3');
+    expect(baseShark[0]?.estado).toBe('OK');
+    const sharkSinNota = aplicarLineaAlBorrador(baseShark, shark, 2, '');
+    expect(sharkSinNota[0]?.cantidadTotal).toBe(4);
+    expect(sharkSinNota[0]?.estado).toBe('REQUIERE_REVISION');
+    expect(sharkSinNota[0]?.requiereRevision).toBe(true);
+
+    // Caso 3: multi-variante ya OK al sumar cantidad con desglose explícito mantiene OK sumando por talle
+    const sharkConNota = aplicarLineaAlBorrador(baseShark, shark, 3, 'de 3 a 6');
+    expect(sharkConNota[0]?.cantidadTotal).toBe(5);
+    expect(sharkConNota[0]?.estado).toBe('OK');
+    expect(sharkConNota[0]?.desglose).toEqual([
+      { codigo: '6504', etiqueta: 'T1 (1-3 años)', cantidad: 2 },
+      { codigo: '6505', etiqueta: 'T2 (3-6 años)', cantidad: 3 }
+    ]);
   });
 });

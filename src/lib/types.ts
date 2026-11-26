@@ -203,11 +203,38 @@ export interface ResumenFinanciero {
   faltaPago: number;
 }
 
+export type TipoAdvertenciaExcel = 'CODIGO_DESCONOCIDO' | 'CANTIDAD_INVALIDA';
+
+export interface SugerenciaProductoCatalogo {
+  idGrupo: string;
+  nombre: string;
+  codigos: string[];
+  rubro: string;
+  motivo: string;
+}
+
+export interface AvisoPrecioExcel {
+  codigo: string;
+  nombreProducto: string;
+  precioPlanilla: number;
+  precioVigente: number;
+}
+
 export interface AdvertenciaExcel {
   hoja: string;
   fila: number;
   codigo: string;
   mensaje: string;
+  id: string;
+  tipo: TipoAdvertenciaExcel;
+  codigosDetectados: string[];
+  descripcionExcel: string;
+  precioExcelReferencia: number | null;
+  cantidadDetectada: number | null;
+  cantidadRaw: string;
+  notaDetectada: string;
+  productoExistenteIdGrupo: string | null;
+  sugerenciasCatalogo: ReadonlyArray<SugerenciaProductoCatalogo>;
 }
 
 export interface ResultadoParseoLista006 {
@@ -215,6 +242,7 @@ export interface ResultadoParseoLista006 {
   errorFatal?: string;
   lineas: LineaPedido[];
   advertencias: AdvertenciaExcel[];
+  avisosPrecio?: ReadonlyArray<AvisoPrecioExcel>;
 }
 
 export interface ResultadoPickingConsolidado {

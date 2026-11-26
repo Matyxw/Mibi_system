@@ -3,6 +3,7 @@ import { CATALOGO_BY_CODIGO, CATALOGO_BY_GRUPO, CATALOGO_MIBI } from './catalogo
 import { addDaysISO, formatNowDateTime, getTodayISO, recalcularPedido, round2 } from './finanzas';
 import type {
   AdvertenciaExcel,
+  AvisoPrecioExcel,
   CellPrimitive,
   EstadoArmado,
   EstadoEnvio,
@@ -14,6 +15,7 @@ import type {
   SheetJSCellObject,
   SheetJSWorkBook,
   SheetJSWorkSheet,
+  SugerenciaProductoCatalogo,
   VarianteCatalogo
 } from './types';
 
@@ -586,17 +588,241 @@ export const parsearCantidadEstricta = (
   return { valid: false, qty: 0, motivo: `Cantidad inválida ("${str}")` };
 };
 
+const STOPWORDS_SUGERENCIA = new Set([
+  'para',
+  'nino',
+  'nina',
+  'ninos',
+  'ninas',
+  'talle',
+  'talles',
+  'color',
+  'colores',
+  'unidad',
+  'unidades',
+  'lista',
+  'mibi',
+  'nuevo',
+  'nueva',
+  'nuevos',
+  'nuevas',
+  'producto',
+  'productos',
+  'articulo',
+  'articulos',
+  'detalle',
+  'modelo'
+]);
+
+const PALABRAS_NO_CODIGO = new Set([
+  'TOTAL',
+  'SUBTOTAL',
+  'ENVIO',
+  'DESCUENTO',
+  'IVA',
+  'NETO',
+  'LISTA',
+  'CODIGOS',
+  'CODIGO',
+  'PRODUCTO',
+  'CANTIDAD',
+  'PRECIO',
+  'EFECTIVO',
+  'TRANSFERENCIA',
+  'CHEQUE'
+]);
+
+const distanciaEdicion = (a: string, b: string): number => {
+  const m = a.length;
+  const n = b.length;
+  if (m === 0) return n;
+  if (n === 0) return m;
+  let prev: number[] = Array.from({ length: n + 1 }, (_, j) => j);
+  let curr: number[] = new Array<number>(n + 1).fill(0);
+  for (let i = 1; i <= m; i++) {
+    curr[0] = i;
+    for (let j = 1; j <= n; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      curr[j] = Math.min(
+        (prev[j] ?? m + n) + 1,
+        (curr[j - 1] ?? m + n) + 1,
+        (prev[j - 1] ?? m + n) + cost
+      );
+    }
+    const tmp = prev;
+    prev = curr;
+    curr = tmp;
+  }
+  return prev[n] ?? m + n;
+};
+
+export const sugerirProductosCercanos = (
+  codigoRaw: string,
+  descripcionExcel: string,
+  catalogo: ReadonlyArray<ProductoCatalogo> = CATALOGO_MIBI
+): SugerenciaProductoCatalogo[] => {
+  const codTokens = limpiarTextoInvisible(codigoRaw)
+    .toUpperCase()
+    .split(/[\s\/,|]+/)
+    .map((t) => t.trim())
+    .filter((t) => t.length >= 3);
+
+  const descKeywords = normalizarTexto(descripcionExcel)
+    .split(/[^a-z0-9]+/)
+    .filter((w) => w.length >= 4 && !STOPWORDS_SUGERENCIA.has(w));
+  const unicosDesc = Array.from(new Set(descKeywords));
+
+  const candidatos: Array<{ score: number; item: SugerenciaProductoCatalogo }> = [];
+
+  for (const prod of catalogo) {
+    let bestCodeScore = 0;
+    for (const v of prod.variantes) {
+      const vCod = v.codigo.trim().toUpperCase();
+      if (!vCod || vCod.length < 3) continue;
+      for (const c of codTokens) {
+        if (c === vCod) {
+          bestCodeScore = Math.max(bestCodeScore, 110);
+          continue;
+        }
+        const minLen = Math.min(c.length, vCod.length);
+        if (minLen >= 3 && distanciaEdicion(c, vCod) <= 1) {
+          bestCodeScore = Math.max(bestCodeScore, 100);
+        } else if (minLen >= 3 && (vCod.startsWith(c) || c.startsWith(vCod))) {
+          bestCodeScore = Math.max(bestCodeScore, 75);
+        }
+      }
+    }
+
+    let nameHits = 0;
+    if (unicosDesc.length > 0) {
+      const prodWords = new Set(
+        normalizarTexto(prod.nombre)
+          .split(/[^a-z0-9]+/)
+          .filter((w) => w.length >= 4 && !STOPWORDS_SUGERENCIA.has(w))
+      );
+      for (const kw of unicosDesc) {
+        if (prodWords.has(kw)) nameHits++;
+      }
+    }
+
+    const nameScore = nameHits >= 2 ? 60 + nameHits * 10 : nameHits === 1 ? 30 : 0;
+    const baseScore = Math.max(bestCodeScore, nameScore);
+    if (baseScore <= 0) continue;
+
+    const motivo = bestCodeScore >= nameScore && bestCodeScore > 0 ? 'Código parecido' : 'Nombre parecido';
+    candidatos.push({
+      score: baseScore + (nameHits > 0 && bestCodeScore > 0 ? nameHits * 5 : 0),
+      item: {
+        idGrupo: prod.idGrupo,
+        nombre: prod.nombre,
+        codigos: prod.variantes.map((v) => v.codigo),
+        rubro: prod.rubro,
+        motivo
+      }
+    });
+  }
+
+  candidatos.sort((a, b) => b.score - a.score);
+  const vistos = new Set<string>();
+  const resultado: SugerenciaProductoCatalogo[] = [];
+  for (const c of candidatos) {
+    if (vistos.has(c.item.idGrupo)) continue;
+    vistos.add(c.item.idGrupo);
+    resultado.push(c.item);
+    if (resultado.length >= 3) break;
+  }
+  return resultado;
+};
+
+export const aplicarLineaAlBorrador = (
+  lineasActuales: ReadonlyArray<LineaPedido>,
+  producto: ProductoCatalogo,
+  cantidadAAgregar: number,
+  notaCliente = ''
+): LineaPedido[] => {
+  const qty = Math.floor(cantidadAAgregar);
+  if (!Number.isFinite(qty) || qty <= 0) return [...lineasActuales];
+
+  const notaLimpia = limpiarTextoInvisible(notaCliente);
+  const idx = lineasActuales.findIndex((l) => l.idGrupo === producto.idGrupo);
+  if (idx === -1) {
+    return [...lineasActuales, resolverLinea(producto, qty, notaLimpia)];
+  }
+
+  const existente = lineasActuales[idx]!;
+  const totalCombinado = existente.cantidadTotal + qty;
+  const notaCombinada = [existente.notaCliente, notaLimpia].filter(Boolean).join(' · ');
+
+  let actualizada: LineaPedido;
+  if (producto.variantes.length === 1) {
+    actualizada = resolverLinea(producto, totalCombinado, notaCombinada);
+  } else {
+    const parteNueva = resolverLinea(producto, qty, notaLimpia);
+    if (
+      existente.estado === 'OK' &&
+      !existente.requiereRevision &&
+      parteNueva.estado === 'OK' &&
+      !parteNueva.requiereRevision
+    ) {
+      const desgloseCombinado = producto.variantes.map((v) => {
+        const cantExist = existente.desglose.find((d) => d.codigo === v.codigo)?.cantidad ?? 0;
+        const cantNueva = parteNueva.desglose.find((d) => d.codigo === v.codigo)?.cantidad ?? 0;
+        return { codigo: v.codigo, etiqueta: v.etiqueta, cantidad: cantExist + cantNueva };
+      });
+      const sumaDesglose = desgloseCombinado.reduce((acc, d) => acc + d.cantidad, 0);
+      if (sumaDesglose === totalCombinado) {
+        actualizada = {
+          idLinea: existente.idLinea,
+          idGrupo: producto.idGrupo,
+          nombreProducto: producto.nombre,
+          rubro: producto.rubro,
+          precioUnitarioNeto: producto.precioNeto,
+          cantidadTotal: totalCombinado,
+          notaCliente: notaCombinada,
+          estado: 'OK',
+          requiereRevision: false,
+          desglose: desgloseCombinado
+        };
+      } else {
+        actualizada = resolverLinea(producto, totalCombinado, notaCombinada);
+      }
+    } else {
+      const intentada = resolverLinea(producto, totalCombinado, notaCombinada);
+      if (parteNueva.requiereRevision && !intentada.requiereRevision) {
+        actualizada = {
+          ...intentada,
+          estado: 'REQUIERE_REVISION',
+          requiereRevision: true,
+          motivoRevision: parteNueva.motivoRevision ?? 'Definir talle o color para las unidades agregadas',
+          desglose: producto.variantes.map((v) => ({ codigo: v.codigo, etiqueta: v.etiqueta, cantidad: 0 }))
+        };
+      } else {
+        actualizada = intentada;
+      }
+    }
+  }
+
+  return lineasActuales.map((l, i) => (i === idx ? actualizada : l));
+};
+
 export const parsearExcelLista006 = (
   buffer: ArrayBuffer,
   fileName: string,
   catalogoExtra: ReadonlyArray<ProductoCatalogo> = CATALOGO_MIBI
 ): ResultadoParseoLista006 => {
   const catalogoPorCodigo = new Map<string, ProductoCatalogo>(CATALOGO_BY_CODIGO);
+  const catalogoUnificadoMap = new Map<string, ProductoCatalogo>();
+  for (const prod of CATALOGO_MIBI) {
+    catalogoUnificadoMap.set(prod.idGrupo, prod);
+  }
   for (const prod of catalogoExtra) {
+    catalogoUnificadoMap.set(prod.idGrupo, prod);
     for (const v of prod.variantes) {
       catalogoPorCodigo.set(v.codigo.trim().toUpperCase(), prod);
     }
   }
+  const catalogoUnificado = Array.from(catalogoUnificadoMap.values());
+
   let wb: SheetJSWorkBook;
   try {
     wb = leerWorkbookSeguro(buffer, fileName);
@@ -605,7 +831,8 @@ export const parsearExcelLista006 = (
       ok: false,
       errorFatal: 'No se pudo leer el archivo. Verificá que sea un Excel (.xlsx, .xls) o CSV válido.',
       lineas: [],
-      advertencias: []
+      advertencias: [],
+      avisosPrecio: []
     };
   }
 
@@ -634,12 +861,14 @@ export const parsearExcelLista006 = (
       errorFatal:
         'El archivo subido no corresponde a la plantilla oficial LISTA N° 006 de Mibi® (no se detectó la cabecera "LISTA N° 006").',
       lineas: [],
-      advertencias: []
+      advertencias: [],
+      avisosPrecio: []
     };
   }
 
   const advertencias: AdvertenciaExcel[] = [];
-  const lineasMap = new Map<string, LineaPedido>();
+  const avisosPrecioMap = new Map<string, AvisoPrecioExcel>();
+  let lineasAcumuladas: LineaPedido[] = [];
 
   for (const sheetName of wb.SheetNames) {
     const ws = wb.Sheets[sheetName];
@@ -648,6 +877,7 @@ export const parsearExcelLista006 = (
 
     let colCodeA = 0;
     let colCodeB = 1;
+    let colDesc = 2;
     let colPrecio = 3;
     let colQty = 4;
     let colNota = 6;
@@ -668,6 +898,16 @@ export const parsearExcelLista006 = (
       const idxDetalleFallback = rowTexts.findIndex((t) => t.includes('detalle') && !t.includes('producto'));
       const idxCodigos = rowTexts.findIndex((t) => t === 'codigos' || t === 'codigo');
       const idxPrecio = rowTexts.findIndex((t) => t === 'precio' || t.includes('precio neto'));
+      const idxDesc = rowTexts.findIndex(
+        (t) =>
+          t === 'producto' ||
+          t === 'productos' ||
+          t === 'descripcion' ||
+          t === 'articulo' ||
+          t === 'articulos' ||
+          t.includes('detalle producto') ||
+          t.includes('detalle del producto')
+      );
 
       if (idxCantPed !== -1 || (idxCodigos !== -1 && (idxCantFallback !== -1 || idxPrecio !== -1))) {
         headerDetectado = true;
@@ -675,6 +915,7 @@ export const parsearExcelLista006 = (
           colCodeA = idxCodigos;
           colCodeB = idxCodigos + 1;
         }
+        if (idxDesc !== -1) colDesc = idxDesc;
         if (idxPrecio !== -1) colPrecio = idxPrecio;
         if (idxCantPed !== -1) colQty = idxCantPed;
         else if (idxCantFallback !== -1) colQty = idxCantFallback;
@@ -692,7 +933,7 @@ export const parsearExcelLista006 = (
       const cleanA = limpiarTextoInvisible(rawA).toUpperCase();
       const cleanB = limpiarTextoInvisible(rawB).toUpperCase();
       const extractCode = (txt: string): string | null => {
-        if (!txt) return null;
+        if (!txt || PALABRAS_NO_CODIGO.has(txt)) return null;
         if (catalogoPorCodigo.has(txt)) return txt;
         const mNum = txt.match(/\b(\d{4})\b/);
         if (mNum && mNum[1]) return mNum[1];
@@ -700,6 +941,9 @@ export const parsearExcelLista006 = (
         if (mExt && mExt[1]) return mExt[1];
         for (const token of txt.split(/[\s\/,|]+/)) {
           if (token && catalogoPorCodigo.has(token)) return token;
+        }
+        if (!txt.includes(' ') && /^[A-Z0-9]{3,16}$/.test(txt) && /(?:\d.*){2,}/.test(txt)) {
+          return txt;
         }
         return null;
       };
@@ -712,9 +956,30 @@ export const parsearExcelLista006 = (
 
       if (codigosEnFila.length === 0) continue;
 
+      const descCell = headerDetectado ? (row[colDesc] ?? null) : (row[2] ?? null);
       const qtyCell = headerDetectado ? (row[colQty] ?? null) : (row[4] ?? null);
       const precioCell = headerDetectado ? (row[colPrecio] ?? null) : (row[3] ?? null);
       const notaCell = headerDetectado ? (row[colNota] ?? null) : (row[6] ?? null);
+
+      const descripcionExcel =
+        descCell !== null && descCell !== undefined ? limpiarTextoInvisible(String(descCell)) : '';
+      const notaDetectada =
+        notaCell !== null && notaCell !== undefined ? limpiarTextoInvisible(String(notaCell)) : '';
+      const cantidadRaw =
+        qtyCell !== null && qtyCell !== undefined ? limpiarTextoInvisible(String(qtyCell)) : '';
+
+      let precioExcelReferencia: number | null = null;
+      if (precioCell !== null && precioCell !== undefined && limpiarTextoInvisible(String(precioCell)) !== '') {
+        const parsedPrecio =
+          typeof precioCell === 'number'
+            ? Number.isFinite(precioCell)
+              ? round2(precioCell)
+              : 0
+            : parsearMontoArgentino(precioCell);
+        if (parsedPrecio > 0) {
+          precioExcelReferencia = parsedPrecio;
+        }
+      }
 
       // Regla oficial: ignorar fila duplicada 6545 sin precio ni cantidad
       if (
@@ -725,19 +990,6 @@ export const parsearExcelLista006 = (
         continue;
       }
 
-      const qtyRes = parsearCantidadEstricta(qtyCell);
-      if (!qtyRes.valid) {
-        advertencias.push({
-          hoja: sheetName,
-          fila: rIdx + 1,
-          codigo: codigosEnFila.join('/'),
-          mensaje: qtyRes.motivo ?? 'Cantidad inválida'
-        });
-        continue;
-      }
-
-      if (qtyRes.qty === 0) continue;
-
       let producto: ProductoCatalogo | undefined;
       for (const cod of codigosEnFila) {
         const encontrado = catalogoPorCodigo.get(cod.toUpperCase()) ?? CATALOGO_BY_CODIGO.get(cod);
@@ -747,33 +999,76 @@ export const parsearExcelLista006 = (
         }
       }
 
-      if (!producto) {
+      const codigoJoined = codigosEnFila.join('/');
+      const qtyRes = parsearCantidadEstricta(qtyCell);
+      if (!qtyRes.valid) {
         advertencias.push({
           hoja: sheetName,
           fila: rIdx + 1,
-          codigo: codigosEnFila.join('/'),
-          mensaje: `Código desconocido (${codigosEnFila.join('/')}) con cantidad ${qtyRes.qty}`
+          codigo: codigoJoined,
+          mensaje: qtyRes.motivo ?? 'Cantidad inválida',
+          id: `${sheetName}#${rIdx + 1}#${codigoJoined}#CANTIDAD_INVALIDA`,
+          tipo: 'CANTIDAD_INVALIDA',
+          codigosDetectados: codigosEnFila,
+          descripcionExcel,
+          precioExcelReferencia,
+          cantidadDetectada: null,
+          cantidadRaw,
+          notaDetectada,
+          productoExistenteIdGrupo: producto ? producto.idGrupo : null,
+          sugerenciasCatalogo: producto
+            ? []
+            : sugerirProductosCercanos(codigoJoined, descripcionExcel, catalogoUnificado)
         });
         continue;
       }
 
-      const notaStr = notaCell !== null && notaCell !== undefined ? String(notaCell) : '';
-      const linea = resolverLinea(producto, qtyRes.qty, notaStr);
-      const existente = lineasMap.get(producto.idGrupo);
-      if (existente) {
-        const suma = existente.cantidadTotal + linea.cantidadTotal;
-        const notaCombinada = [existente.notaCliente, linea.notaCliente].filter(Boolean).join(' · ');
-        lineasMap.set(producto.idGrupo, resolverLinea(producto, suma, notaCombinada));
-      } else {
-        lineasMap.set(producto.idGrupo, linea);
+      if (qtyRes.qty === 0) continue;
+
+      if (!producto) {
+        advertencias.push({
+          hoja: sheetName,
+          fila: rIdx + 1,
+          codigo: codigoJoined,
+          mensaje: `Código desconocido (${codigoJoined}) con cantidad ${qtyRes.qty}`,
+          id: `${sheetName}#${rIdx + 1}#${codigoJoined}#CODIGO_DESCONOCIDO`,
+          tipo: 'CODIGO_DESCONOCIDO',
+          codigosDetectados: codigosEnFila,
+          descripcionExcel,
+          precioExcelReferencia,
+          cantidadDetectada: qtyRes.qty,
+          cantidadRaw,
+          notaDetectada,
+          productoExistenteIdGrupo: null,
+          sugerenciasCatalogo: sugerirProductosCercanos(codigoJoined, descripcionExcel, catalogoUnificado)
+        });
+        continue;
       }
+
+      // Auditoría de precio informativa sin confiar nunca en el precio de la planilla
+      if (
+        precioExcelReferencia !== null &&
+        precioExcelReferencia > 0 &&
+        Math.abs(precioExcelReferencia - producto.precioNeto) > 1 &&
+        !avisosPrecioMap.has(codigoJoined)
+      ) {
+        avisosPrecioMap.set(codigoJoined, {
+          codigo: codigoJoined,
+          nombreProducto: producto.nombre,
+          precioPlanilla: precioExcelReferencia,
+          precioVigente: producto.precioNeto
+        });
+      }
+
+      lineasAcumuladas = aplicarLineaAlBorrador(lineasAcumuladas, producto, qtyRes.qty, notaDetectada);
     }
   }
 
   return {
     ok: true,
-    lineas: Array.from(lineasMap.values()),
-    advertencias
+    lineas: lineasAcumuladas,
+    advertencias,
+    avisosPrecio: Array.from(avisosPrecioMap.values())
   };
 };
 
