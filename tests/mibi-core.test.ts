@@ -36,6 +36,7 @@ import {
 } from '@/lib/excel-exporter';
 import {
   buildWhatsAppUrl,
+  generarMensajeAjusteStockWhatsApp,
   generarMensajeDespachoWhatsApp,
   generarMensajeWhatsApp
 } from '@/lib/whatsapp';
@@ -58,6 +59,7 @@ vi.mock('@/lib/auth/session', () => ({
 }));
 
 import {
+  actualizarArticulosPedidoDal,
   batchUpdatePedidosDal,
   ConflictError,
   crearPedidoDal,
@@ -1400,5 +1402,506 @@ describe('MIBI Core — Catálogo, Centavos, Excel, Seguridad y RBAC', () => {
       { codigo: '6504', etiqueta: 'T1 (1-3 años)', cantidad: 2 },
       { codigo: '6505', etiqueta: 'T2 (3-6 años)', cantidad: 3 }
     ]);
+  });
+
+  // 49-55 (Tests A-G): Edición de artículos guardados, precio histórico, saldo a favor, cheque, depósito, RBAC y WhatsApp
+  it('49. Test A: Reducción de cantidad en variante específica conserva precio histórico y genera diff legible', async () => {
+    mockSession = {
+      userId: '00000000-0000-4000-8000-000000000001',
+      username: 'admin',
+      nombre: 'Administración',
+      rol: 'ADMIN',
+      tokenVersion: 1
+    };
+
+    const shark = CATALOGO_BY_CODIGO.get('6504')!;
+    const pilusoHist = await crearProductoCatalogoDal({
+      nombre: 'Piluso Histórico Test A',
+      rubro: 'PILUSOS',
+      precioNeto: 8500,
+      variantes: [{ codigo: 'PIL-HIST-1', etiqueta: 'Único', aliases: ['unico'] }]
+    });
+
+    const ped = await crearPedidoDal({
+      cliente: 'Cliente Precio Histórico',
+      vendedor: 'Juancho',
+      whatsapp: '11-5555-1111',
+      fechaPedido: getTodayISO(),
+      despachoPrevisto: addDaysISO(getTodayISO(), 5),
+      observaciones: '',
+      descuentoPorc: 0,
+      medioPago: 'Sin pagar',
+      montoAbonado: 0,
+      montoCheque: 0,
+      fechaRecepcionCheque: '',
+      fechaAcreditacionCheque: '',
+      detalleCheque: '',
+      lineas: [
+        resolverLinea(shark, 6, '3 t1, 3 t2'),
+        resolverLinea(customRecordToProductoCatalogo(pilusoHist), 2, '')
+      ]
+    });
+
+    // Subimos el precio en catálogo a $12.000 después de guardar el pedido
+    await editarProductoCatalogoDal(pilusoHist.id, {
+      nombre: 'Piluso Histórico Test A',
+      rubro: 'PILUSOS',
+      precioNeto: 12000,
+      variantes: [{ codigo: 'PIL-HIST-1', etiqueta: 'Único', aliases: ['unico'] }]
+    });
+
+    // Bajamos Shark T1 de 3 a 1 (total Shark = 4 u.) sin tocar Piluso
+    const lineaSharkEditada = {
+      ...ped.lineas[0]!,
+      cantidadTotal: 4,
+      desglose: [
+        { codigo: '6504', etiqueta: 'T1 (1-3 años)', cantidad: 1 },
+        { codigo: '6505', etiqueta: 'T2 (3-6 años)', cantidad: 3 }
+      ]
+    };
+
+    const res = await actualizarArticulosPedidoDal({
+      pedidoId: ped.id,
+      expectedVersion: ped.version,
+      lineas: [lineaSharkEditada, ped.lineas[1]!]
+    });
+
+    const pilusoLineaPost = res.pedido.lineas.find((l) => l.idGrupo === pilusoHist.idGrupo)!;
+    const sharkLineaPost = res.pedido.lineas.find((l) => l.idGrupo === shark.idGrupo)!;
+    expect(sharkLineaPost.estado).toBe('OK');
+    expect(sharkLineaPost.cantidadTotal).toBe(4);
+    expect(pilusoLineaPost.precioUnitarioNeto).toBe(8500);
+
+    // Recálculo exacto en centavos: (4 * 46612 + 2 * 8500) * 1.21
+    const esperadoSubtotal = 4 * shark.precioNeto + 2 * 8500;
+    const esperadoIva = round2(esperadoSubtotal * 0.21);
+    expect(res.pedido.subtotalNeto).toBe(esperadoSubtotal);
+    expect(res.pedido.iva21).toBe(esperadoIva);
+    expect(res.pedido.totalFacturado).toBe(round2(esperadoSubtotal + esperadoIva));
+    expect(res.pedido.historial.some((h) => h.accion.includes('3 → 1 u.'))).toBe(true);
+  });
+
+  it('50. Test B: Quitar línea sin stock y agregar reemplazo de productos_custom recalcula exacto', async () => {
+    mockSession = {
+      userId: '00000000-0000-4000-8000-000000000001',
+      username: 'admin',
+      nombre: 'Administración',
+      rol: 'ADMIN',
+      tokenVersion: 1
+    };
+
+    const dino = CATALOGO_BY_CODIGO.get('6510')!;
+    const pilusoNuevo = await crearProductoCatalogoDal({
+      nombre: 'Piluso Reemplazo B',
+      rubro: 'PILUSOS',
+      precioNeto: 9000,
+      variantes: [{ codigo: 'PIL-REEM-B', etiqueta: 'Único', aliases: ['unico'] }]
+    });
+
+    const ped = await crearPedidoDal({
+      cliente: 'Cliente Reemplazo',
+      vendedor: 'Juancho',
+      whatsapp: '11-5555-2222',
+      fechaPedido: getTodayISO(),
+      despachoPrevisto: addDaysISO(getTodayISO(), 5),
+      observaciones: '',
+      descuentoPorc: 0,
+      medioPago: 'Sin pagar',
+      montoAbonado: 0,
+      montoCheque: 0,
+      fechaRecepcionCheque: '',
+      fechaAcreditacionCheque: '',
+      detalleCheque: '',
+      lineas: [resolverLinea(dino, 3, '')]
+    });
+
+    const res = await actualizarArticulosPedidoDal({
+      pedidoId: ped.id,
+      expectedVersion: ped.version,
+      lineas: [resolverLinea(customRecordToProductoCatalogo(pilusoNuevo), 2, '')]
+    });
+
+    expect(res.pedido.lineas).toHaveLength(1);
+    expect(res.pedido.totalFacturado).toBe(round2(2 * 9000 * 1.21));
+    expect(res.resumenAjuste.cambios.some((c) => c.tipo === 'quitado' && c.nombreProducto === dino.nombre)).toBe(true);
+    expect(res.resumenAjuste.cambios.some((c) => c.tipo === 'agregado' && c.nombreProducto === 'Piluso Reemplazo B')).toBe(
+      true
+    );
+    expect(res.pedido.historial.some((h) => h.accion.includes('Quitó:') && h.accion.includes('Agregó:'))).toBe(true);
+  });
+
+  it('51. Test C: Caso borde Saldo a Favor cuando montoAbonado supera el nuevo total', async () => {
+    mockSession = {
+      userId: '00000000-0000-4000-8000-000000000001',
+      username: 'admin',
+      nombre: 'Administración',
+      rol: 'ADMIN',
+      tokenVersion: 1
+    };
+
+    const dino = CATALOGO_BY_CODIGO.get('6510')!;
+    const qtyInicial = 10;
+    const totalInicial = round2(qtyInicial * dino.precioNeto * 1.21);
+
+    const ped = await crearPedidoDal({
+      cliente: 'Cliente Saldo Favor',
+      vendedor: 'Juancho',
+      whatsapp: '11-5555-3333',
+      fechaPedido: getTodayISO(),
+      despachoPrevisto: addDaysISO(getTodayISO(), 5),
+      observaciones: 'Pago adelantado completo',
+      descuentoPorc: 0,
+      medioPago: 'Transferencia / Efectivo',
+      montoAbonado: totalInicial,
+      montoCheque: 0,
+      fechaRecepcionCheque: '',
+      fechaAcreditacionCheque: '',
+      detalleCheque: '',
+      lineas: [resolverLinea(dino, qtyInicial, '')]
+    });
+
+    const res = await actualizarArticulosPedidoDal({
+      pedidoId: ped.id,
+      expectedVersion: ped.version,
+      lineas: [resolverLinea(dino, 6, '')]
+    });
+
+    const nuevoTotalEsperado = round2(6 * dino.precioNeto * 1.21);
+    const saldoFavorEsperado = round2(totalInicial - nuevoTotalEsperado);
+
+    expect(res.pedido.totalFacturado).toBe(nuevoTotalEsperado);
+    expect(res.pedido.montoAbonado).toBe(nuevoTotalEsperado);
+    expect(res.pedido.estadoPago).toBe('Pagado');
+    expect(res.pedido.saldoPendiente).toBe(0);
+    expect(res.resumenAjuste.saldoAFavorGenerado).toBe(saldoFavorEsperado);
+    expect(res.pedido.observaciones).toContain('Saldo a favor del cliente por ajuste de stock');
+    expect(res.pedido.historial.some((h) => h.accion.includes('Saldo a favor del cliente'))).toBe(true);
+  });
+
+  it('52. Test D: Pedido Pagado que sube pasa a Pendiente y Cheque pendiente acota montoCheque si baja', async () => {
+    mockSession = {
+      userId: '00000000-0000-4000-8000-000000000001',
+      username: 'admin',
+      nombre: 'Administración',
+      rol: 'ADMIN',
+      tokenVersion: 1
+    };
+
+    const dino = CATALOGO_BY_CODIGO.get('6510')!;
+    const tot2 = round2(2 * dino.precioNeto * 1.21);
+
+    // Subcaso 1: Pedido Pagado aumenta de 2 a 4 u. -> vuelve a Pendiente con saldoPendiente exacto
+    const pedPagado = await crearPedidoDal({
+      cliente: 'Cliente Sube Total',
+      vendedor: 'Juancho',
+      whatsapp: '11-5555-4444',
+      fechaPedido: getTodayISO(),
+      despachoPrevisto: addDaysISO(getTodayISO(), 5),
+      observaciones: '',
+      descuentoPorc: 0,
+      medioPago: 'Transferencia / Efectivo',
+      montoAbonado: tot2,
+      montoCheque: 0,
+      fechaRecepcionCheque: '',
+      fechaAcreditacionCheque: '',
+      detalleCheque: '',
+      lineas: [resolverLinea(dino, 2, '')]
+    });
+
+    const resSube = await actualizarArticulosPedidoDal({
+      pedidoId: pedPagado.id,
+      expectedVersion: pedPagado.version,
+      lineas: [resolverLinea(dino, 4, '')]
+    });
+    const tot4 = round2(4 * dino.precioNeto * 1.21);
+    expect(resSube.pedido.estadoPago).toBe('Pendiente');
+    expect(resSube.pedido.saldoPendiente).toBe(round2(tot4 - tot2));
+
+    // Subcaso 2: Pedido con Cheque pendiente baja de 4 a 2 u. -> acota montoCheque y reporta diferenciaCheque
+    const pedCheque = await crearPedidoDal({
+      cliente: 'Cliente Cheque Baja',
+      vendedor: 'Juancho',
+      whatsapp: '11-5555-5555',
+      fechaPedido: getTodayISO(),
+      despachoPrevisto: addDaysISO(getTodayISO(), 5),
+      observaciones: '',
+      descuentoPorc: 0,
+      medioPago: 'Cheque',
+      montoAbonado: 0,
+      montoCheque: tot4,
+      fechaRecepcionCheque: getTodayISO(),
+      fechaAcreditacionCheque: addDaysISO(getTodayISO(), 30),
+      detalleCheque: 'Galicia #901',
+      lineas: [resolverLinea(dino, 4, '')]
+    });
+
+    const resCheque = await actualizarArticulosPedidoDal({
+      pedidoId: pedCheque.id,
+      expectedVersion: pedCheque.version,
+      lineas: [resolverLinea(dino, 2, '')]
+    });
+    expect(resCheque.pedido.montoCheque).toBe(tot2);
+    expect(resCheque.resumenAjuste.diferenciaCheque).toBe(round2(tot4 - tot2));
+  });
+
+  it('53. Test E: Sincronización con Depósito (requiereRelectura), cierre de incidencia y Hoja Depósito sin precios', async () => {
+    const DEP_ID = '00000000-0000-4000-8000-000000000006';
+    const dino = CATALOGO_BY_CODIGO.get('6510')!;
+    const shark = CATALOGO_BY_CODIGO.get('6504')!;
+
+    mockSession = {
+      userId: '00000000-0000-4000-8000-000000000001',
+      username: 'admin',
+      nombre: 'Administración',
+      rol: 'ADMIN',
+      tokenVersion: 1
+    };
+
+    const ped = await crearPedidoDal({
+      cliente: 'Cliente Depósito Sync',
+      vendedor: 'Juancho',
+      whatsapp: '11-5555-6666',
+      fechaPedido: getTodayISO(),
+      despachoPrevisto: addDaysISO(getTodayISO(), 5),
+      observaciones: '',
+      descuentoPorc: 0,
+      medioPago: 'Sin pagar',
+      montoAbonado: 0,
+      montoCheque: 0,
+      fechaRecepcionCheque: '',
+      fechaAcreditacionCheque: '',
+      detalleCheque: '',
+      lineas: [resolverLinea(shark, 4, '2 t1, 2 t2'), resolverLinea(dino, 3, '')]
+    });
+
+    await enviarPedidosACuentasDal({
+      pedidoIds: [ped.id],
+      usuarioIds: [DEP_ID],
+      prioridad: 'NORMAL',
+      notaEnvio: '',
+      forzarSinPago: true
+    });
+
+    // Depósito marca como visto y luego reporta faltante
+    mockSession = {
+      userId: DEP_ID,
+      username: 'deposito',
+      nombre: 'Depósito',
+      rol: 'DEPOSITO',
+      tokenVersion: 1
+    };
+    await marcarPedidoVistoDal(ped.id);
+    const conIncidencia = await reportarIncidenciaDepositoDal(ped.id, 'Faltan 2 Dino');
+
+    // ADMIN ajusta cantidades y marca resolverIncidencia: true
+    mockSession = {
+      userId: '00000000-0000-4000-8000-000000000001',
+      username: 'admin',
+      nombre: 'Administración',
+      rol: 'ADMIN',
+      tokenVersion: 1
+    };
+    const res = await actualizarArticulosPedidoDal({
+      pedidoId: ped.id,
+      expectedVersion: conIncidencia.version,
+      lineas: [ped.lineas[0]!, resolverLinea(dino, 1, '')],
+      resolverIncidencia: true
+    });
+
+    expect(res.pedido.incidenciaDeposito).toBe('');
+    expect(res.resumenAjuste.avisoRelecturaDeposito).toBe(true);
+    expect(res.resumenAjuste.incidenciaResuelta).toBe(true);
+    expect(res.pedido.asignaciones.some((a) => a.requiereRelectura && a.vistoAt === null)).toBe(true);
+
+    // Verificar Hoja de Depósito sin precios y con nueva cantidad (4 + 1 = 5 u.)
+    const hoja = generarBufferHojaDeposito(res.pedido);
+    expect(hoja.success).toBe(true);
+    const wb = XLSX.read(hoja.buffer!, { type: 'buffer' });
+    const rows = XLSX.utils.sheet_to_json<Array<string | number>>(wb.Sheets[wb.SheetNames[0]!]!, { header: 1 });
+    const textoHoja = rows.flat().join(' ');
+    expect(textoHoja).not.toContain('$');
+    const filaDino = rows.find((r) => String(r[0]) === '6510');
+    expect(filaDino?.[3]).toBe(1);
+    const filaTotal = rows.find((r) => String(r[2]).includes('TOTAL UNIDADES'));
+    expect(filaTotal?.[3]).toBe(5);
+  });
+
+  it('54. Test F: Seguridad RBAC (DEPOSITO / VENTAS), anti-vacío y ConflictError', async () => {
+    const DEP_ID = '00000000-0000-4000-8000-000000000006';
+    const JUANCHO_ID = '00000000-0000-4000-8000-000000000002';
+    const dino = CATALOGO_BY_CODIGO.get('6510')!;
+
+    mockSession = {
+      userId: JUANCHO_ID,
+      username: 'juancho',
+      nombre: 'Juancho',
+      rol: 'VENTAS',
+      tokenVersion: 1
+    };
+    const pedVentas = await crearPedidoDal({
+      cliente: 'Cliente RBAC',
+      vendedor: 'Juancho',
+      whatsapp: '11-5555-7777',
+      fechaPedido: getTodayISO(),
+      despachoPrevisto: addDaysISO(getTodayISO(), 5),
+      observaciones: '',
+      descuentoPorc: 0,
+      medioPago: 'Sin pagar',
+      montoAbonado: 0,
+      montoCheque: 0,
+      fechaRecepcionCheque: '',
+      fechaAcreditacionCheque: '',
+      detalleCheque: '',
+      lineas: [resolverLinea(dino, 2, '')]
+    });
+
+    // VENTAS puede editar su pedido mientras está sin pagos y sin enviar a Depósito
+    const okVentas = await actualizarArticulosPedidoDal({
+      pedidoId: pedVentas.id,
+      expectedVersion: pedVentas.version,
+      lineas: [resolverLinea(dino, 3, '')]
+    });
+    expect(okVentas.pedido.version).toBe(pedVentas.version + 1);
+
+    // Concurrencia: expectedVersion viejo lanza ConflictError
+    await expect(
+      actualizarArticulosPedidoDal({
+        pedidoId: pedVentas.id,
+        expectedVersion: pedVentas.version,
+        lineas: [resolverLinea(dino, 5, '')]
+      })
+    ).rejects.toBeInstanceOf(ConflictError);
+
+    // Anti-vacío: 0 artículos es rechazado en servidor
+    await expect(
+      actualizarArticulosPedidoDal({
+        pedidoId: pedVentas.id,
+        expectedVersion: okVentas.pedido.version,
+        lineas: []
+      })
+    ).rejects.toThrow();
+
+    // ADMIN envía a Depósito y registra cobro -> VENTAS y DEPOSITO quedan bloqueados (403 AuthError)
+    mockSession = {
+      userId: '00000000-0000-4000-8000-000000000001',
+      username: 'admin',
+      nombre: 'Administración',
+      rol: 'ADMIN',
+      tokenVersion: 1
+    };
+    await enviarPedidosACuentasDal({
+      pedidoIds: [pedVentas.id],
+      usuarioIds: [DEP_ID],
+      prioridad: 'NORMAL',
+      notaEnvio: '',
+      forzarSinPago: true
+    });
+
+    mockSession = {
+      userId: DEP_ID,
+      username: 'deposito',
+      nombre: 'Depósito',
+      rol: 'DEPOSITO',
+      tokenVersion: 1
+    };
+    await expect(
+      actualizarArticulosPedidoDal({
+        pedidoId: pedVentas.id,
+        expectedVersion: okVentas.pedido.version,
+        lineas: [resolverLinea(dino, 1, '')]
+      })
+    ).rejects.toBeInstanceOf(AuthError);
+
+    mockSession = {
+      userId: JUANCHO_ID,
+      username: 'juancho',
+      nombre: 'Juancho',
+      rol: 'VENTAS',
+      tokenVersion: 1
+    };
+    await expect(
+      actualizarArticulosPedidoDal({
+        pedidoId: pedVentas.id,
+        expectedVersion: okVentas.pedido.version,
+        lineas: [resolverLinea(dino, 1, '')]
+      })
+    ).rejects.toBeInstanceOf(AuthError);
+  });
+
+  it('55. Test G: generarMensajeAjusteStockWhatsApp formatea variaciones, total y saldo', () => {
+    const msgPendiente = generarMensajeAjusteStockWhatsApp(
+      {
+        cliente: 'Casa Lorenzo',
+        numeroPedido: '0042',
+        totalFacturado: 3390120.4,
+        saldoPendiente: 1200000
+      },
+      {
+        cambios: [
+          {
+            tipo: 'modificado',
+            nombreProducto: 'Chaleco Shark',
+            detalle: 'T1 1-3 años',
+            cantidadAnterior: 3,
+            cantidadNueva: 1
+          },
+          {
+            tipo: 'quitado',
+            nombreProducto: 'Antiparras Dino',
+            cantidadAnterior: 3,
+            cantidadNueva: 0
+          },
+          {
+            tipo: 'agregado',
+            nombreProducto: 'Piluso Shark',
+            cantidadAnterior: 0,
+            cantidadNueva: 2
+          }
+        ],
+        totalAnterior: 3560673.05,
+        totalNuevo: 3390120.4,
+        unidadesAnteriores: 8,
+        unidadesNuevas: 6,
+        saldoAFavorGenerado: 0,
+        diferenciaCheque: 0,
+        avisoRelecturaDeposito: false,
+        incidenciaResuelta: false
+      }
+    );
+
+    expect(msgPendiente).toContain('Casa Lorenzo');
+    expect(msgPendiente).toContain('#0042');
+    expect(msgPendiente).toContain('Chaleco Shark (T1 1-3 años): de 3 a 1 u.');
+    expect(msgPendiente).toContain('Antiparras Dino: quitado por falta de stock');
+    expect(msgPendiente).toContain('Piluso Shark: agregado (2 u.)');
+    expect(msgPendiente).toContain('Saldo pendiente:');
+
+    const msgSaldoFavor = generarMensajeAjusteStockWhatsApp(
+      {
+        cliente: 'Casa Lorenzo',
+        numeroPedido: '0042',
+        totalFacturado: 850000,
+        saldoPendiente: 0
+      },
+      {
+        cambios: [
+          {
+            tipo: 'modificado',
+            nombreProducto: 'Antiparras Dino',
+            cantidadAnterior: 10,
+            cantidadNueva: 8
+          }
+        ],
+        totalAnterior: 1000000,
+        totalNuevo: 850000,
+        unidadesAnteriores: 10,
+        unidadesNuevas: 8,
+        saldoAFavorGenerado: 150000,
+        diferenciaCheque: 0,
+        avisoRelecturaDeposito: false,
+        incidenciaResuelta: false
+      }
+    );
+    expect(msgSaldoFavor).toContain('Saldo a favor:');
   });
 });

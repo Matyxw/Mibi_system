@@ -282,3 +282,23 @@ export interface ToastState {
   texto: string;
   tone: ToneStatus;
 }
+
+export interface CambioArticuloAjuste {
+  tipo: 'modificado' | 'quitado' | 'agregado';
+  nombreProducto: string;
+  detalle?: string;
+  cantidadAnterior: number;
+  cantidadNueva: number;
+}
+
+export interface ResumenAjusteArticulos {
+  cambios: CambioArticuloAjuste[];
+  totalAnterior: number;
+  totalNuevo: number;
+  unidadesAnteriores: number;
+  unidadesNuevas: number;
+  saldoAFavorGenerado: number;
+  diferenciaCheque: number;
+  avisoRelecturaDeposito: boolean;
+  incidenciaResuelta: boolean;
+}

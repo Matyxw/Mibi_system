@@ -15,15 +15,19 @@ import {
 import { normalizarTexto } from '@/lib/excel-parser';
 import {
   addDaysISO,
+  formatARS,
   formatNowDateTime,
   formatShortDate,
+  fromCents,
   getTodayISO,
   recalcularPedido,
-  round2
+  round2,
+  toCents
 } from '@/lib/finanzas';
 import {
   isDepositoRole,
   rolUsuarioToLabel,
+  type CambioArticuloAjuste,
   type EstadoArmado,
   type EstadoEnvio,
   type HistorialEvento,
@@ -34,6 +38,7 @@ import {
   type PedidoBase,
   type PrioridadAsignacion,
   type ProductoCustomRecord,
+  type ResumenAjusteArticulos,
   type RolUsuario,
   type SessionUser
 } from '@/lib/types';
@@ -146,26 +151,73 @@ const fromNumericString = (val: string | null | undefined): number => {
   return Number.isFinite(n) ? n : 0;
 };
 
+export interface ActualizarArticulosInput {
+  pedidoId: string;
+  expectedVersion: number;
+  lineas: LineaPedido[];
+  resolverIncidencia?: boolean;
+  confirmarSobreDespachado?: boolean;
+}
+
+export interface ActualizarArticulosResult {
+  pedido: Pedido;
+  resumenAjuste: ResumenAjusteArticulos;
+}
+
 const sanitizarLineasContraCatalogo = (
   lineas: ReadonlyArray<LineaPedido>,
-  customCatalogo: ReadonlyArray<ProductoCustomRecord>
+  customCatalogo: ReadonlyArray<ProductoCustomRecord>,
+  lineasExistentes?: ReadonlyArray<LineaPedido>
 ): LineaPedido[] => {
-  const customByGrupo = new Map<string, ProductoCustomRecord>();
+  const customActivosByGrupo = new Map<string, ProductoCustomRecord>();
   for (const c of customCatalogo) {
-    customByGrupo.set(c.idGrupo, c);
+    if (c.activo) {
+      customActivosByGrupo.set(c.idGrupo, c);
+    }
+  }
+
+  const historicasByGrupo = new Map<string, LineaPedido>();
+  if (lineasExistentes) {
+    for (const h of lineasExistentes) {
+      historicasByGrupo.set(h.idGrupo, h);
+    }
   }
 
   return lineas.map((l) => {
+    const desgloseLimpio = l.desglose.map((d) => ({
+      codigo: d.codigo.trim(),
+      etiqueta: d.etiqueta.trim(),
+      cantidad: Math.max(0, Math.trunc(d.cantidad))
+    }));
+    const cantidadTotal = Math.max(1, Math.trunc(l.cantidadTotal));
+    const sumaDesglose = desgloseLimpio.reduce((acc, d) => acc + d.cantidad, 0);
+    const desgloseValido =
+      desgloseLimpio.length > 0 && l.estado === 'OK' && !l.requiereRevision && sumaDesglose === cantidadTotal;
+
+    // Precio histórico congelado para cualquier línea cuyo idGrupo ya existía en el pedido
+    const historica = historicasByGrupo.get(l.idGrupo);
+    if (historica) {
+      return {
+        ...l,
+        nombreProducto: historica.nombreProducto,
+        rubro: historica.rubro,
+        precioUnitarioNeto: historica.precioUnitarioNeto,
+        cantidadTotal,
+        notaCliente: l.notaCliente.trim(),
+        estado: desgloseValido ? 'OK' : 'REQUIERE_REVISION',
+        requiereRevision: !desgloseValido,
+        motivoRevision: desgloseValido ? undefined : (l.motivoRevision ?? 'Falta definir talle o color'),
+        desglose: desgloseLimpio
+      };
+    }
+
     const prodOficial = CATALOGO_BY_GRUPO.get(l.idGrupo);
-    const prodCustom = customByGrupo.get(l.idGrupo);
+    const prodCustom = customActivosByGrupo.get(l.idGrupo);
     const esAdhoc = l.idGrupo.startsWith('ADHOC-');
 
     if (!prodOficial && !prodCustom && !esAdhoc) {
-      throw new Error(`Producto desconocido en catálogo: ${l.idGrupo}`);
+      throw new Error(`Producto desconocido o inactivo en catálogo: ${l.idGrupo}`);
     }
-
-    const sumaDesglose = l.desglose.reduce((acc, d) => acc + Math.max(0, Math.trunc(d.cantidad)), 0);
-    const desgloseValido = l.estado === 'OK' && !l.requiereRevision && sumaDesglose === l.cantidadTotal;
 
     if (prodOficial) {
       return {
@@ -173,9 +225,12 @@ const sanitizarLineasContraCatalogo = (
         nombreProducto: prodOficial.nombre,
         rubro: prodOficial.rubro,
         precioUnitarioNeto: prodOficial.precioNeto,
-        cantidadTotal: Math.max(1, Math.trunc(l.cantidadTotal)),
+        cantidadTotal,
+        notaCliente: l.notaCliente.trim(),
         estado: desgloseValido ? 'OK' : 'REQUIERE_REVISION',
-        requiereRevision: !desgloseValido
+        requiereRevision: !desgloseValido,
+        motivoRevision: desgloseValido ? undefined : (l.motivoRevision ?? 'Falta definir talle o color'),
+        desglose: desgloseLimpio
       };
     }
 
@@ -185,15 +240,18 @@ const sanitizarLineasContraCatalogo = (
         nombreProducto: prodCustom.nombre,
         rubro: prodCustom.rubro,
         precioUnitarioNeto: prodCustom.precioNeto,
-        cantidadTotal: Math.max(1, Math.trunc(l.cantidadTotal)),
+        cantidadTotal,
+        notaCliente: l.notaCliente.trim(),
         estado: desgloseValido ? 'OK' : 'REQUIERE_REVISION',
-        requiereRevision: !desgloseValido
+        requiereRevision: !desgloseValido,
+        motivoRevision: desgloseValido ? undefined : (l.motivoRevision ?? 'Falta definir talle o color'),
+        desglose: desgloseLimpio
       };
     }
 
-    // Producto fuera de planilla ad-hoc (solo para este pedido)
+    // Producto fuera de planilla ad-hoc nuevo (solo para este pedido)
     const nombre = l.nombreProducto.trim();
-    if (!nombre || l.desglose.length === 0) {
+    if (!nombre || desgloseLimpio.length === 0) {
       throw new Error('Producto fuera de planilla inválido.');
     }
     return {
@@ -201,9 +259,12 @@ const sanitizarLineasContraCatalogo = (
       nombreProducto: nombre,
       rubro: l.rubro.trim().toUpperCase() || 'OTROS',
       precioUnitarioNeto: round2(Math.max(0, l.precioUnitarioNeto)),
-      cantidadTotal: Math.max(1, Math.trunc(l.cantidadTotal)),
+      cantidadTotal,
+      notaCliente: l.notaCliente.trim(),
       estado: desgloseValido ? 'OK' : 'REQUIERE_REVISION',
-      requiereRevision: !desgloseValido
+      requiereRevision: !desgloseValido,
+      motivoRevision: desgloseValido ? undefined : (l.motivoRevision ?? 'Falta definir talle o color'),
+      desglose: desgloseLimpio
     };
   });
 };
@@ -836,7 +897,7 @@ const applyPatchToPedido = (
 ): Pedido => {
   const hoy = getTodayISO();
   const nextLineas = patch.lineas
-    ? sanitizarLineasContraCatalogo(patch.lineas, customCatalogo)
+    ? sanitizarLineasContraCatalogo(patch.lineas, customCatalogo, actual.lineas)
     : actual.lineas;
   const faltantesSiguiente = nextLineas.filter((l) => l.requiereRevision || l.estado !== 'OK').length;
 
@@ -2073,4 +2134,436 @@ export const reiniciarSistemaDal = async (): Promise<void> => {
     await tx.delete(pedidos);
     await tx.execute(sql`SELECT setval('public.pedidos_numero_seq', 1, false)`);
   });
+};
+
+const computarDiffArticulos = (
+  anteriores: ReadonlyArray<LineaPedido>,
+  nuevas: ReadonlyArray<LineaPedido>,
+  totalAnterior: number,
+  totalNuevo: number
+): {
+  cambios: CambioArticuloAjuste[];
+  partesHistorial: string[];
+  unidadesAnteriores: number;
+  unidadesNuevas: number;
+} => {
+  const antesByGrupo = new Map<string, LineaPedido>();
+  for (const l of anteriores) antesByGrupo.set(l.idGrupo, l);
+
+  const nuevasByGrupo = new Map<string, LineaPedido>();
+  for (const l of nuevas) nuevasByGrupo.set(l.idGrupo, l);
+
+  const ordenGrupos: string[] = [];
+  const vistos = new Set<string>();
+  for (const l of anteriores) {
+    if (!vistos.has(l.idGrupo)) {
+      vistos.add(l.idGrupo);
+      ordenGrupos.push(l.idGrupo);
+    }
+  }
+  for (const l of nuevas) {
+    if (!vistos.has(l.idGrupo)) {
+      vistos.add(l.idGrupo);
+      ordenGrupos.push(l.idGrupo);
+    }
+  }
+
+  const cambios: CambioArticuloAjuste[] = [];
+  const partesHistorial: string[] = [];
+
+  for (const idGrupo of ordenGrupos) {
+    const antes = antesByGrupo.get(idGrupo);
+    const despues = nuevasByGrupo.get(idGrupo);
+
+    if (antes && !despues) {
+      cambios.push({
+        tipo: 'quitado',
+        nombreProducto: antes.nombreProducto,
+        cantidadAnterior: antes.cantidadTotal,
+        cantidadNueva: 0
+      });
+      partesHistorial.push(`Quitó: ${antes.nombreProducto} (${antes.cantidadTotal} u.)`);
+      continue;
+    }
+
+    if (!antes && despues) {
+      const detalle =
+        despues.estado === 'OK' && despues.desglose.length >= 2
+          ? despues.desglose
+              .filter((d) => d.cantidad > 0)
+              .map((d) => `${d.etiqueta}: ${d.cantidad}`)
+              .join(', ')
+          : undefined;
+      cambios.push({
+        tipo: 'agregado',
+        nombreProducto: despues.nombreProducto,
+        ...(detalle ? { detalle } : {}),
+        cantidadAnterior: 0,
+        cantidadNueva: despues.cantidadTotal
+      });
+      partesHistorial.push(`Agregó: ${despues.nombreProducto} (${despues.cantidadTotal} u.)`);
+      continue;
+    }
+
+    if (antes && despues) {
+      if (antes.estado === 'OK' && despues.estado === 'OK' && (antes.desglose.length >= 2 || despues.desglose.length >= 2)) {
+        const varMapAntes = new Map<string, { etiqueta: string; qty: number }>();
+        for (const d of antes.desglose) {
+          varMapAntes.set(d.codigo, { etiqueta: d.etiqueta, qty: d.cantidad });
+        }
+        const varMapDespues = new Map<string, { etiqueta: string; qty: number }>();
+        for (const d of despues.desglose) {
+          varMapDespues.set(d.codigo, { etiqueta: d.etiqueta, qty: d.cantidad });
+        }
+        const codigosVar = Array.from(new Set([...varMapAntes.keys(), ...varMapDespues.keys()]));
+        for (const cod of codigosVar) {
+          const prevVar = varMapAntes.get(cod);
+          const nextVar = varMapDespues.get(cod);
+          const qAntes = prevVar?.qty ?? 0;
+          const qDespues = nextVar?.qty ?? 0;
+          if (qAntes !== qDespues) {
+            const etiqueta = nextVar?.etiqueta || prevVar?.etiqueta || cod;
+            const delta = qDespues - qAntes;
+            const deltaSign = delta > 0 ? `+${delta}` : `${delta}`;
+            cambios.push({
+              tipo: 'modificado',
+              nombreProducto: despues.nombreProducto,
+              detalle: etiqueta,
+              cantidadAnterior: qAntes,
+              cantidadNueva: qDespues
+            });
+            partesHistorial.push(`${despues.nombreProducto} · ${etiqueta} (${cod}): ${qAntes} → ${qDespues} u. (${deltaSign})`);
+          }
+        }
+      } else if (antes.cantidadTotal !== despues.cantidadTotal || antes.estado !== despues.estado) {
+        const delta = despues.cantidadTotal - antes.cantidadTotal;
+        const deltaSign = delta > 0 ? `+${delta}` : `${delta}`;
+        cambios.push({
+          tipo: 'modificado',
+          nombreProducto: despues.nombreProducto,
+          cantidadAnterior: antes.cantidadTotal,
+          cantidadNueva: despues.cantidadTotal
+        });
+        partesHistorial.push(
+          `${despues.nombreProducto}: ${antes.cantidadTotal} → ${despues.cantidadTotal} u.${delta !== 0 ? ` (${deltaSign})` : ''}`
+        );
+      }
+    }
+  }
+
+  const unidadesAnteriores = anteriores.reduce((acc, l) => acc + l.cantidadTotal, 0);
+  const unidadesNuevas = nuevas.reduce((acc, l) => acc + l.cantidadTotal, 0);
+
+  if (partesHistorial.length === 0) {
+    partesHistorial.push(
+      `Sin cambios de unidades (${unidadesNuevas} u.) · Total: ${formatARS(totalAnterior)} → ${formatARS(totalNuevo)}`
+    );
+  }
+
+  return {
+    cambios,
+    partesHistorial,
+    unidadesAnteriores,
+    unidadesNuevas
+  };
+};
+
+const ejecutarAjusteArticulosCore = (
+  actual: Pedido,
+  input: ActualizarArticulosInput,
+  session: SessionUser,
+  customCatalogo: ReadonlyArray<ProductoCustomRecord>
+): {
+  actualizado: Pedido;
+  resumenAjuste: ResumenAjusteArticulos;
+  accionesHistorial: string[];
+  depositoAsigIds: string[];
+} => {
+  if (!isPedidoVisibleForSession(actual, session)) {
+    throw new AuthError('No tenés acceso a este pedido.', 403);
+  }
+  if (isDepositoRole(session.rol)) {
+    throw new AuthError('Las cuentas de Depósito no pueden editar artículos ni montos de un pedido.', 403);
+  }
+  const esAdmin = session.rol === 'ADMIN';
+  if (!esAdmin) {
+    if (actual.montoAbonado > 0 || actual.chequeAcreditado) {
+      throw new AuthError('Ya tiene cobros registrados; pedile el ajuste a Administración.', 403);
+    }
+    if (actual.estadoEnvio !== 'Pendiente' || actual.estadoArmado === 'Listo') {
+      throw new AuthError('El pedido ya fue marcado Listo o Despachado; pedile el ajuste a Administración.', 403);
+    }
+    if (actual.asignaciones.some((a) => isDepositoRole(a.usuarioRol))) {
+      throw new AuthError('Ya fue enviado a Depósito; pedile el ajuste a Administración.', 403);
+    }
+  }
+
+  if (actual.version !== input.expectedVersion) {
+    throw new ConflictError();
+  }
+  if (input.lineas.length === 0) {
+    throw new Error('El pedido debe tener al menos un artículo.');
+  }
+
+  const lineasSeguras = sanitizarLineasContraCatalogo(input.lineas, customCatalogo, actual.lineas);
+  const faltantesSiguiente = lineasSeguras.filter((l) => l.requiereRevision || l.estado !== 'OK').length;
+
+  if (actual.estadoEnvio !== 'Pendiente') {
+    if (!input.confirmarSobreDespachado) {
+      throw new Error('Confirmá explícitamente el ajuste sobre este pedido ya despachado o entregado.');
+    }
+    if (faltantesSiguiente > 0) {
+      throw new Error('Definí los talles/colores de los artículos nuevos antes de guardar en un pedido ya despachado.');
+    }
+  }
+
+  const prevTotalCents = toCents(actual.totalFacturado);
+  const prevAbonadoCents = toCents(actual.montoAbonado);
+  const prevChequeCents = toCents(actual.montoCheque);
+
+  const previewBase: PedidoBase = {
+    ...actual,
+    lineas: lineasSeguras,
+    totalFacturadoOverride: undefined
+  };
+  const preview = recalcularPedido(previewBase);
+  const nuevoTotalCents = toCents(preview.totalFacturado);
+
+  let saldoAFavorGenerado = 0;
+  let nextObservaciones = actual.observaciones;
+  const accionesExtra: string[] = [];
+
+  if (prevAbonadoCents > nuevoTotalCents) {
+    saldoAFavorGenerado = fromCents(prevAbonadoCents - nuevoTotalCents);
+    const notaSaldoAFavor = `Saldo a favor del cliente por ajuste de stock: ${formatARS(saldoAFavorGenerado)} (había abonado ${formatARS(actual.montoAbonado)} · nuevo total ${formatARS(preview.totalFacturado)})`;
+    nextObservaciones = [actual.observaciones.trim(), notaSaldoAFavor].filter(Boolean).join(' · ');
+    accionesExtra.push(notaSaldoAFavor);
+  }
+
+  let diferenciaCheque = 0;
+  if (actual.medioPago === 'Cheque' && !actual.chequeAcreditado && prevChequeCents > 0) {
+    const cubiertoCents = prevAbonadoCents + prevChequeCents;
+    if (cubiertoCents > nuevoTotalCents) {
+      const nuevoChequeCents = Math.max(0, nuevoTotalCents - Math.min(prevAbonadoCents, nuevoTotalCents));
+      diferenciaCheque = fromCents(Math.max(0, prevChequeCents - nuevoChequeCents));
+      if (diferenciaCheque > 0) {
+        accionesExtra.push(`Revisar el cheque recibido por una diferencia de ${formatARS(diferenciaCheque)}`);
+      }
+    }
+  }
+
+  const depositoAsigIds = actual.asignaciones
+    .filter((a) => isDepositoRole(a.usuarioRol))
+    .map((a) => a.id);
+  const avisoRelecturaDeposito = depositoAsigIds.length > 0;
+  if (avisoRelecturaDeposito) {
+    accionesExtra.push('Artículos modificados después de enviar a Depósito — requiere revisar hoja');
+  }
+
+  const incidenciaResuelta = Boolean(actual.incidenciaDeposito && esAdmin && input.resolverIncidencia === true);
+  if (incidenciaResuelta) {
+    accionesExtra.push('Marcó como resuelto el aviso de Depósito al ajustar artículos');
+  }
+
+  const diff = computarDiffArticulos(actual.lineas, lineasSeguras, actual.totalFacturado, preview.totalFacturado);
+  const accionPrincipal = `Ajustó artículos: ${diff.partesHistorial.join(' · ')} · Total: ${formatARS(fromCents(prevTotalCents))} → ${formatARS(preview.totalFacturado)}`;
+  const accionesHistorial = [accionPrincipal, ...accionesExtra];
+
+  const now = Date.now();
+  const hora = formatNowDateTime();
+  const rolLabel = rolUsuarioToLabel(session.rol);
+  const nuevosEventos: HistorialEvento[] = [...accionesHistorial].reverse().map((accion) => ({
+    fechaHora: hora,
+    usuario: session.nombre,
+    rol: rolLabel,
+    accion
+  }));
+
+  const actualizado = recalcularPedido({
+    ...previewBase,
+    observaciones: nextObservaciones,
+    incidenciaDeposito: incidenciaResuelta ? '' : actual.incidenciaDeposito,
+    incidenciaAt: incidenciaResuelta ? null : actual.incidenciaAt,
+    incidenciaPor: incidenciaResuelta ? '' : actual.incidenciaPor,
+    asignaciones: actual.asignaciones.map((a) =>
+      depositoAsigIds.includes(a.id)
+        ? { ...a, requiereRelectura: true, vistoAt: null, updatedAt: now }
+        : a
+    ),
+    version: actual.version + 1,
+    updatedAt: now,
+    historial: [...nuevosEventos, ...actual.historial]
+  });
+
+  const resumenAjuste: ResumenAjusteArticulos = {
+    cambios: diff.cambios,
+    totalAnterior: actual.totalFacturado,
+    totalNuevo: actualizado.totalFacturado,
+    unidadesAnteriores: diff.unidadesAnteriores,
+    unidadesNuevas: diff.unidadesNuevas,
+    saldoAFavorGenerado,
+    diferenciaCheque,
+    avisoRelecturaDeposito,
+    incidenciaResuelta
+  };
+
+  return {
+    actualizado,
+    resumenAjuste,
+    accionesHistorial,
+    depositoAsigIds
+  };
+};
+
+export const actualizarArticulosPedidoDal = async (
+  input: ActualizarArticulosInput
+): Promise<ActualizarArticulosResult> => {
+  const session = await requireSession();
+  const customCatalogo = await listarProductosCustomDal(false);
+  const rolLabel = rolUsuarioToLabel(session.rol);
+
+  if (isLocalFallbackMode()) {
+    const store = readLocalStore();
+    const idx = store.pedidos.findIndex((p) => p.id === input.pedidoId && !p.deletedAt);
+    if (idx === -1) throw new Error('Pedido no encontrado.');
+    const actualWithAsig = attachLocalAsignaciones([store.pedidos[idx]!], store.pedidoAsignaciones)[0]!;
+
+    const { actualizado, resumenAjuste, depositoAsigIds } = ejecutarAjusteArticulosCore(
+      actualWithAsig,
+      input,
+      session,
+      customCatalogo
+    );
+
+    const now = actualizado.updatedAt;
+    for (const asig of store.pedidoAsignaciones) {
+      if (depositoAsigIds.includes(asig.id)) {
+        asig.requiereRelectura = true;
+        asig.vistoAt = null;
+        asig.updatedAt = now;
+      }
+    }
+
+    store.pedidos[idx] = actualizado;
+    writeLocalStore(store);
+
+    return {
+      pedido: sanitizePedidoForRole(actualizado, session.rol, session.userId),
+      resumenAjuste
+    };
+  }
+
+  const db = getDb();
+  const result = await db.transaction(async (tx) => {
+    const rows = await tx
+      .select()
+      .from(pedidos)
+      .where(and(eq(pedidos.id, input.pedidoId), isNull(pedidos.deletedAt)))
+      .limit(1);
+    const pr = rows[0];
+    if (!pr) throw new Error('Pedido no encontrado.');
+
+    const [lineasRows, historialRows, asignacionesRows] = await Promise.all([
+      tx.select().from(pedidoLineas).where(eq(pedidoLineas.pedidoId, input.pedidoId)),
+      tx
+        .select()
+        .from(pedidoHistorial)
+        .where(eq(pedidoHistorial.pedidoId, input.pedidoId))
+        .orderBy(desc(pedidoHistorial.createdAt)),
+      tx
+        .select({
+          asig: pedidoAsignaciones,
+          usuarioNombre: usuarios.nombre,
+          usuarioRol: usuarios.rol
+        })
+        .from(pedidoAsignaciones)
+        .leftJoin(usuarios, eq(pedidoAsignaciones.usuarioId, usuarios.id))
+        .where(eq(pedidoAsignaciones.pedidoId, input.pedidoId))
+    ]);
+
+    const actual = mapDbRowsToPedidos([pr], lineasRows, historialRows, asignacionesRows)[0]!;
+    const { actualizado, resumenAjuste, accionesHistorial, depositoAsigIds } = ejecutarAjusteArticulosCore(
+      actual,
+      input,
+      session,
+      customCatalogo
+    );
+
+    const nowDate = new Date(actualizado.updatedAt);
+    const updatedRows = await tx
+      .update(pedidos)
+      .set({
+        subtotalNeto: toNumericString(actualizado.subtotalNeto),
+        montoDescuento: toNumericString(actualizado.montoDescuento),
+        baseImponible: toNumericString(actualizado.baseImponible),
+        iva21: toNumericString(actualizado.iva21),
+        totalFacturado: toNumericString(actualizado.totalFacturado),
+        totalFacturadoOverride: null,
+        montoAbonado: toNumericString(actualizado.montoAbonado),
+        montoCheque: toNumericString(actualizado.montoCheque),
+        chequeAcreditado: actualizado.chequeAcreditado,
+        saldoPendiente: toNumericString(actualizado.saldoPendiente),
+        deudaSinRespaldo: toNumericString(actualizado.deudaSinRespaldo),
+        estadoPago: actualizado.estadoPago,
+        estadoArmado: actualizado.estadoArmado,
+        observaciones: actualizado.observaciones,
+        incidenciaDeposito: actualizado.incidenciaDeposito,
+        incidenciaAt: actualizado.incidenciaAt ? new Date(actualizado.incidenciaAt) : null,
+        incidenciaPor: actualizado.incidenciaPor,
+        version: actualizado.version,
+        updatedAt: nowDate
+      })
+      .where(and(eq(pedidos.id, input.pedidoId), eq(pedidos.version, actual.version)))
+      .returning({ id: pedidos.id });
+
+    if (updatedRows.length === 0) {
+      throw new ConflictError();
+    }
+
+    await tx.delete(pedidoLineas).where(eq(pedidoLineas.pedidoId, input.pedidoId));
+    await tx.insert(pedidoLineas).values(
+      actualizado.lineas.map((l) => ({
+        pedidoId: input.pedidoId,
+        idLinea: l.idLinea,
+        idGrupo: l.idGrupo,
+        nombreProducto: l.nombreProducto,
+        rubro: l.rubro,
+        precioUnitarioNeto: toNumericString(l.precioUnitarioNeto),
+        cantidadTotal: l.cantidadTotal,
+        notaCliente: l.notaCliente,
+        estado: l.estado,
+        requiereRevision: l.requiereRevision,
+        motivoRevision: l.motivoRevision ?? null,
+        desgloseJson: l.desglose
+      }))
+    );
+
+    if (depositoAsigIds.length > 0) {
+      await tx
+        .update(pedidoAsignaciones)
+        .set({
+          requiereRelectura: true,
+          vistoAt: null,
+          updatedAt: nowDate
+        })
+        .where(inArray(pedidoAsignaciones.id, depositoAsigIds));
+    }
+
+    await tx.insert(pedidoHistorial).values(
+      accionesHistorial.map((accion) => ({
+        pedidoId: input.pedidoId,
+        usuarioId: session.userId,
+        usuarioNombre: session.nombre,
+        rol: rolLabel,
+        accion
+      }))
+    );
+
+    return { actualizado, resumenAjuste };
+  });
+
+  return {
+    pedido: sanitizePedidoForRole(result.actualizado, session.rol, session.userId),
+    resumenAjuste: result.resumenAjuste
+  };
 };

@@ -13,6 +13,7 @@ import {
   Info,
   Lock,
   MessageCircle,
+  Minus,
   Plus,
   RotateCcw,
   Search,
@@ -292,6 +293,70 @@ export function NuevoPedidoView({
       delete next[idGrupo];
       return next;
     });
+  };
+
+  // Ajuste directo en Paso 3: actualiza lineasBorrador y cantidadesManuales sin invocar sincronizarManualConBorrador
+  const handleAjusteRapidoLineaPaso3 = (idGrupo: string, nuevaCantidad: number): void => {
+    const qty = Math.max(1, Math.trunc(nuevaCantidad));
+    setLineasBorrador((prev) =>
+      prev.map((l) => {
+        if (l.idGrupo !== idGrupo) return l;
+        const nuevoDesglose =
+          l.desglose.length === 1 && l.desglose[0]
+            ? [{ ...l.desglose[0], cantidad: qty }]
+            : l.desglose;
+        return {
+          ...l,
+          cantidadTotal: qty,
+          desglose: nuevoDesglose
+        };
+      })
+    );
+    setCantidadesManuales((prev) => ({ ...prev, [idGrupo]: qty }));
+  };
+
+  const handleAjusteVariantePaso3 = (
+    idGrupo: string,
+    codigoVar: string,
+    siguienteVarQty: number
+  ): void => {
+    const varQty = Math.max(0, Math.trunc(siguienteVarQty));
+    const lineaActual = lineasBorrador.find((l) => l.idGrupo === idGrupo);
+    if (!lineaActual) return;
+    const prod = catalogoCompleto.find((p) => p.idGrupo === idGrupo);
+    const variantesBase = prod && prod.variantes.length > 0 ? prod.variantes : lineaActual.desglose;
+
+    const nuevoDesglose = variantesBase.map((v) => {
+      const prevCant = lineaActual.desglose.find((d) => d.codigo === v.codigo)?.cantidad ?? 0;
+      return {
+        codigo: v.codigo,
+        etiqueta: v.etiqueta,
+        cantidad: v.codigo === codigoVar ? varQty : prevCant
+      };
+    });
+
+    const nuevaSuma = nuevoDesglose.reduce((acc, d) => acc + d.cantidad, 0);
+    if (nuevaSuma <= 0) return;
+
+    setLineasBorrador((prev) =>
+      prev.map((l) =>
+        l.idGrupo === idGrupo
+          ? {
+              ...l,
+              cantidadTotal: nuevaSuma,
+              estado: 'OK',
+              requiereRevision: false,
+              motivoRevision: undefined,
+              notaCliente: nuevoDesglose
+                .filter((d) => d.cantidad > 0)
+                .map((d) => `${d.cantidad} ${d.etiqueta}`)
+                .join(' · '),
+              desglose: nuevoDesglose
+            }
+          : l
+      )
+    );
+    setCantidadesManuales((prev) => ({ ...prev, [idGrupo]: nuevaSuma }));
   };
 
   const limpiarEstadoAlertas = (): void => {
@@ -2084,14 +2149,14 @@ export function NuevoPedidoView({
                 </h2>
               </div>
 
-              <div className="max-h-72 overflow-y-auto divide-y divide-zinc-200/60 dark:divide-[#26262B]/80 border border-zinc-200/70 dark:border-[#26262B] rounded-xl">
+              <div className="max-h-96 overflow-y-auto divide-y divide-zinc-200/60 dark:divide-[#26262B]/80 border border-zinc-200/70 dark:border-[#26262B] rounded-xl">
                 {lineasBorrador.map((l) => {
                   const prod = catalogoCompleto.find((p) => p.idGrupo === l.idGrupo);
                   const variantes = prod ? prod.variantes : l.desglose;
-                  const puedeEditarTalles = !l.requiereRevision && variantes.length >= 2;
+                  const esMultiResuelto = !l.requiereRevision && l.estado === 'OK' && variantes.length >= 2;
                   return (
                     <div key={l.idLinea} className="px-3.5 py-2.5 space-y-2 text-xs">
-                      <div className="flex items-center justify-between gap-3">
+                      <div className="flex items-center justify-between gap-2.5">
                         <div className="min-w-0">
                           <div className="font-medium text-[#111111] dark:text-[#F4F4F5] truncate">
                             {l.nombreProducto}
@@ -2099,21 +2164,52 @@ export function NuevoPedidoView({
                           <div className="text-[11px] text-zinc-400 dark:text-zinc-500 tabular-nums">
                             {l.requiereRevision
                               ? `Pendiente definir (${l.cantidadTotal} u.)`
-                              : l.desglose
-                                  .filter((d) => d.cantidad > 0)
-                                  .map((d) => `${d.codigo} ${d.etiqueta}: ${d.cantidad}`)
-                                  .join(' · ')}
+                              : `${formatARSCompacto(l.precioUnitarioNeto)} c/u neto · ${l.cantidadTotal} u.`}
                           </div>
                         </div>
-                        <div className="flex items-center gap-2.5 shrink-0 tabular-nums">
-                          {puedeEditarTalles && editandoLineaId !== l.idLinea && (
+                        <div className="flex items-center gap-2 shrink-0 tabular-nums">
+                          {!esMultiResuelto && (
+                            <div className="inline-flex items-center rounded-lg border border-zinc-200 dark:border-[#2E2E35] bg-[#FAFAFA] dark:bg-[#1B1B1F]">
+                              <button
+                                type="button"
+                                disabled={l.cantidadTotal <= 1}
+                                onClick={() => handleAjusteRapidoLineaPaso3(l.idGrupo, l.cantidadTotal - 1)}
+                                aria-label={`Restar ${l.nombreProducto}`}
+                                className="p-1 text-zinc-600 hover:text-[#111111] dark:text-zinc-300 dark:hover:text-white disabled:opacity-35 disabled:cursor-not-allowed"
+                              >
+                                <Minus className="w-3 h-3" strokeWidth={1.75} />
+                              </button>
+                              <input
+                                type="number"
+                                min={1}
+                                value={l.cantidadTotal}
+                                onWheel={(e) => e.currentTarget.blur()}
+                                onChange={(e) => {
+                                  const n = parseInt(e.target.value, 10);
+                                  if (Number.isFinite(n) && n >= 1) {
+                                    handleAjusteRapidoLineaPaso3(l.idGrupo, n);
+                                  }
+                                }}
+                                className="w-10 text-center text-xs font-medium bg-transparent text-[#111111] dark:text-[#F4F4F5] tabular-nums focus:outline-none"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => handleAjusteRapidoLineaPaso3(l.idGrupo, l.cantidadTotal + 1)}
+                                aria-label={`Sumar ${l.nombreProducto}`}
+                                className="p-1 text-zinc-600 hover:text-[#111111] dark:text-zinc-300 dark:hover:text-white"
+                              >
+                                <Plus className="w-3 h-3" strokeWidth={1.75} />
+                              </button>
+                            </div>
+                          )}
+                          {esMultiResuelto && editandoLineaId !== l.idLinea && (
                             <button
                               type="button"
                               onClick={() => setEditandoLineaId(l.idLinea)}
                               className="text-[11px] text-zinc-400 hover:text-[#111111] dark:text-zinc-500 dark:hover:text-[#F4F4F5] inline-flex items-center gap-1"
                             >
                               <Edit3 className="w-3 h-3" strokeWidth={1.5} />
-                              Editar talles
+                              Repartir
                             </button>
                           )}
                           <span className="font-semibold text-[#111111] dark:text-[#F4F4F5]">
@@ -2129,6 +2225,59 @@ export function NuevoPedidoView({
                           </button>
                         </div>
                       </div>
+
+                      {esMultiResuelto && editandoLineaId !== l.idLinea && (
+                        <div className="flex flex-wrap gap-1.5">
+                          {variantes.map((v) => {
+                            const qtyVar = l.desglose.find((d) => d.codigo === v.codigo)?.cantidad ?? 0;
+                            const esUltimaUnidad = qtyVar <= 1 && l.cantidadTotal <= 1;
+                            return (
+                              <div
+                                key={v.codigo}
+                                className="inline-flex items-center gap-1.5 rounded-lg bg-[#FAFAFA] dark:bg-[#1B1B1F] border border-zinc-200/80 dark:border-[#26262B] px-2 py-1 text-[11px]"
+                              >
+                                <span className="text-zinc-600 dark:text-zinc-300 truncate max-w-[140px]">
+                                  {v.codigo} {v.etiqueta}
+                                </span>
+                                <div className="inline-flex items-center rounded border border-zinc-200 dark:border-[#2E2E35] bg-white dark:bg-[#141417]">
+                                  <button
+                                    type="button"
+                                    disabled={qtyVar <= 0 || esUltimaUnidad}
+                                    onClick={() => handleAjusteVariantePaso3(l.idGrupo, v.codigo, qtyVar - 1)}
+                                    aria-label={`Restar ${v.etiqueta}`}
+                                    className="p-0.5 text-zinc-600 hover:text-[#111111] dark:text-zinc-300 dark:hover:text-white disabled:opacity-30 disabled:cursor-not-allowed"
+                                  >
+                                    <Minus className="w-2.5 h-2.5" strokeWidth={1.75} />
+                                  </button>
+                                  <input
+                                    type="number"
+                                    min={0}
+                                    value={qtyVar}
+                                    onWheel={(e) => e.currentTarget.blur()}
+                                    onChange={(e) => {
+                                      const n = parseInt(e.target.value, 10);
+                                      handleAjusteVariantePaso3(
+                                        l.idGrupo,
+                                        v.codigo,
+                                        Number.isFinite(n) ? Math.max(0, n) : 0
+                                      );
+                                    }}
+                                    className="w-7 text-center text-[11px] font-medium bg-transparent text-[#111111] dark:text-[#F4F4F5] tabular-nums focus:outline-none"
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() => handleAjusteVariantePaso3(l.idGrupo, v.codigo, qtyVar + 1)}
+                                    aria-label={`Sumar ${v.etiqueta}`}
+                                    className="p-0.5 text-zinc-600 hover:text-[#111111] dark:text-zinc-300 dark:hover:text-white"
+                                  >
+                                    <Plus className="w-2.5 h-2.5" strokeWidth={1.75} />
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
 
                       {editandoLineaId === l.idLinea && renderVariantResolverBorrador(l, 'edicion')}
                     </div>

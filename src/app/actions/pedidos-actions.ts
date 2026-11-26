@@ -4,6 +4,7 @@ import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 import { AuthError, requireAdmin, requireSession } from '@/lib/dal/auth';
 import {
+  actualizarArticulosPedidoDal,
   batchUpdatePedidosDal,
   ConflictError,
   crearPedidoDal,
@@ -18,6 +19,7 @@ import {
   restorePedidosDal,
   retirarAsignacionDal,
   softDeletePedidosDal,
+  type ActualizarArticulosResult,
   type BatchActionInput,
   type EnviarCuentasResult,
   type PatchPedidoInput
@@ -43,6 +45,26 @@ const LineaSchema = z.object({
   requiereRevision: z.boolean(),
   motivoRevision: z.string().optional(),
   desglose: z.array(DesgloseSchema)
+});
+
+const LineaAjusteSchema = LineaSchema.superRefine((linea, ctx) => {
+  if (linea.estado === 'OK' && !linea.requiereRevision) {
+    const suma = linea.desglose.reduce((acc, d) => acc + d.cantidad, 0);
+    if (suma !== linea.cantidadTotal) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `El desglose de ${linea.nombreProducto} (${suma}) debe coincidir con el total (${linea.cantidadTotal}).`
+      });
+    }
+  }
+});
+
+const ActualizarArticulosSchema = z.object({
+  pedidoId: z.string().min(1),
+  expectedVersion: z.number().int().positive('Falta la versión del pedido para validar cambios concurrentes.'),
+  lineas: z.array(LineaAjusteSchema).min(1, 'El pedido debe tener al menos un artículo.'),
+  resolverIncidencia: z.boolean().optional(),
+  confirmarSobreDespachado: z.boolean().optional()
 });
 
 const CrearPedidoSchema = z.object({
@@ -189,6 +211,26 @@ export async function patchPedidoAction(
       return { ok: false, conflict: true, error: err.message };
     }
     return { ok: false, error: toActionError(err, 'No se pudo actualizar el pedido.') };
+  }
+}
+
+export async function actualizarArticulosPedidoAction(
+  raw: z.infer<typeof ActualizarArticulosSchema>
+): Promise<ActionResponse<ActualizarArticulosResult>> {
+  try {
+    await requireSession();
+    const parsed = ActualizarArticulosSchema.safeParse(raw);
+    if (!parsed.success) {
+      return { ok: false, error: parsed.error.issues[0]?.message ?? 'Datos de artículos inválidos.' };
+    }
+    const result = await actualizarArticulosPedidoDal(parsed.data);
+    revalidatePath('/');
+    return { ok: true, data: result };
+  } catch (err) {
+    if (err instanceof ConflictError) {
+      return { ok: false, conflict: true, error: err.message };
+    }
+    return { ok: false, error: toActionError(err, 'No se pudieron actualizar los artículos del pedido.') };
   }
 }
 

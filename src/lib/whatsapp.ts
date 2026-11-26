@@ -1,5 +1,6 @@
 import { CATALOGO_BY_GRUPO } from './catalogo-mibi';
-import type { LineaPedido, Pedido, ProductoCatalogo } from './types';
+import { formatARS } from './finanzas';
+import type { LineaPedido, Pedido, ProductoCatalogo, ResumenAjusteArticulos } from './types';
 
 export const generarMensajeWhatsApp = (
   cliente: string,
@@ -36,6 +37,36 @@ export const generarMensajeDespachoWhatsApp = (
   const guia = pedido.nroSeguimiento.trim();
   if (!transporte || !guia) return '';
   return `¡Hola ${pedido.cliente}! Tu pedido #${pedido.numeroPedido} de Mibi® ya fue despachado por ${transporte}. Guía de seguimiento: ${guia}`;
+};
+
+export const generarMensajeAjusteStockWhatsApp = (
+  pedido: Pick<Pedido, 'cliente' | 'numeroPedido' | 'totalFacturado' | 'saldoPendiente'>,
+  resumenAjuste: ResumenAjusteArticulos
+): string => {
+  const saludo = pedido.cliente.trim() ? `¡Hola ${pedido.cliente.trim()}!` : '¡Hola!';
+  const bullets = resumenAjuste.cambios
+    .map((c) => {
+      const detalle = c.detalle ? ` (${c.detalle})` : '';
+      if (c.tipo === 'quitado') {
+        return `• ${c.nombreProducto}${detalle}: quitado por falta de stock`;
+      }
+      if (c.tipo === 'agregado') {
+        return `• ${c.nombreProducto}${detalle}: agregado (${c.cantidadNueva} u.)`;
+      }
+      return `• ${c.nombreProducto}${detalle}: de ${c.cantidadAnterior} a ${c.cantidadNueva} u.`;
+    })
+    .join('\n');
+
+  const partesSaldo: string[] = [];
+  if (resumenAjuste.saldoAFavorGenerado > 0.005) {
+    partesSaldo.push(`Saldo a favor: ${formatARS(resumenAjuste.saldoAFavorGenerado)}`);
+  } else if (pedido.saldoPendiente > 0.005) {
+    partesSaldo.push(`Saldo pendiente: ${formatARS(pedido.saldoPendiente)}`);
+  }
+  const suffixSaldo = partesSaldo.length > 0 ? ` (${partesSaldo.join(' · ')})` : '';
+  const cuerpoLista = bullets ? `\n\n${bullets}` : '';
+
+  return `${saludo} Te escribimos de Mibi® por tu pedido #${pedido.numeroPedido}. Te avisamos que ajustamos las cantidades según disponibilidad de stock:${cuerpoLista}\n\nEl nuevo total actualizado quedó en ${formatARS(resumenAjuste.totalNuevo)}${suffixSaldo}. ¿Te parece bien que avancemos así? ¡Muchas gracias!`;
 };
 
 export const buildWhatsAppUrl = (telefonoRaw: string, mensaje: string): string | null => {

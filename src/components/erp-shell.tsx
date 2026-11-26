@@ -19,6 +19,7 @@ import {
 import { logoutAction } from '@/app/actions/auth-actions';
 import { listarProductosCustomAction } from '@/app/actions/catalogo-actions';
 import {
+  actualizarArticulosPedidoAction,
   batchPedidosAction,
   crearPedidoAction,
   enviarPedidosACuentasAction,
@@ -60,6 +61,7 @@ import {
   type PrioridadAsignacion,
   type ProductoCatalogo,
   type ProductoCustomRecord,
+  type ResumenAjusteArticulos,
   type ResumenFinanciero,
   type SessionUser,
   type ToastState,
@@ -759,6 +761,38 @@ export function ErpShell({
       return true;
     }
     return false;
+  };
+
+  const handleActualizarArticulos = async (params: {
+    pedidoId: string;
+    expectedVersion: number;
+    lineas: LineaPedido[];
+    resolverIncidencia?: boolean;
+    confirmarSobreDespachado?: boolean;
+  }): Promise<ResumenAjusteArticulos | null> => {
+    const res = await withLock(`articulos:${params.pedidoId}`, async () => {
+      const actionRes = await actualizarArticulosPedidoAction(params);
+      if (!actionRes.ok || !actionRes.data) {
+        if (actionRes.conflict) {
+          setConflictoVersion(true);
+        }
+        notify(actionRes.error ?? 'No se pudieron actualizar los artículos del pedido.', 'red');
+        return null;
+      }
+      const { pedido: updated, resumenAjuste } = actionRes.data;
+      setConflictoVersion(false);
+      setPedidos((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
+      if (resumenAjuste.saldoAFavorGenerado > 0.005) {
+        notify(
+          `Pedido #${updated.numeroPedido} ajustado · Saldo a favor del cliente: ${formatARS(resumenAjuste.saldoAFavorGenerado)}.`,
+          'amber'
+        );
+      } else {
+        notify(`Artículos del pedido #${updated.numeroPedido} actualizados.`, 'green');
+      }
+      return resumenAjuste;
+    });
+    return res ?? null;
   };
 
   const handleEnviarACuentas = async (params: {
@@ -1830,6 +1864,7 @@ export function ErpShell({
           onPatch={handlePatchPedido}
           onConfirmarAcreditacion={handleConfirmarAcreditacion}
           onResolverLinea={handleResolverEnDrawer}
+          onActualizarArticulos={handleActualizarArticulos}
           onExportarHojaDeposito={handleExportarHojaDeposito}
           onDuplicarComoNuevo={handleDuplicarComoNuevoPedido}
           onEliminarIndividual={handleEliminarIndividual}
