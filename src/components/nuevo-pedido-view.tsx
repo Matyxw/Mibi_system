@@ -27,23 +27,33 @@ import {
   aplicarResolucionLinea,
   crearLineasEjemploLista006,
   normalizarTexto,
-  parsearExcelLista006,
   parsearMontoArgentino,
-  resolverLinea
+  resolverLinea,
+  sugerirProductosCercanos
 } from '@/lib/excel-parser';
 import { addDaysISO, formatARS, formatARSCompacto, fromCents, getTodayISO, round2, toCents } from '@/lib/finanzas';
+import { detectarPedidoDuplicado } from '@/lib/import/anti-duplicado';
+import { analizarPlanilla } from '@/lib/import/analizar-planilla';
 import { buildWhatsAppUrl, generarMensajeWhatsApp } from '@/lib/whatsapp';
 import type {
   AdvertenciaExcel,
   AvisoPrecioExcel,
+  CampoAutocompletadoImport,
   ClienteConocido,
+  ControlImportacionBorrador,
+  CorreccionAutomatica,
+  DatosClienteDetectados,
   DesgloseVariante,
   LineaPedido,
   MedioPago,
+  Pedido,
   ProductoCatalogo,
   ProductoCustomRecord,
+  ResultadoAnalisisArchivo,
   ToneStatus
 } from '@/lib/types';
+import { PanelVerificacionImportacion } from './import/panel-verificacion-importacion';
+import { VisorReferencia } from './import/visor-referencia';
 
 export interface FormNuevoPedidoState {
   cliente: string;
@@ -91,6 +101,7 @@ interface NuevoPedidoViewProps {
   proximoNumeroPedido: string;
   catalogoCompleto: ReadonlyArray<ProductoCatalogo>;
   clientesConocidos: ReadonlyArray<ClienteConocido>;
+  pedidosRecientes: ReadonlyArray<Pedido>;
   form: FormNuevoPedidoState;
   setForm: React.Dispatch<React.SetStateAction<FormNuevoPedidoState>>;
   lineasBorrador: LineaPedido[];
@@ -101,6 +112,8 @@ interface NuevoPedidoViewProps {
   setAdvertenciasExcel: React.Dispatch<React.SetStateAction<AdvertenciaExcel[]>>;
   nombreArchivoCargado: string;
   setNombreArchivoCargado: React.Dispatch<React.SetStateAction<string>>;
+  controlImportacion: ControlImportacionBorrador | null;
+  setControlImportacion: React.Dispatch<React.SetStateAction<ControlImportacionBorrador | null>>;
   copiadoId: string | null;
   guardandoPedido: boolean;
   onVolver: () => void;
@@ -130,6 +143,7 @@ export function NuevoPedidoView({
   proximoNumeroPedido,
   catalogoCompleto,
   clientesConocidos,
+  pedidosRecientes,
   form,
   setForm,
   lineasBorrador,
@@ -140,6 +154,8 @@ export function NuevoPedidoView({
   setAdvertenciasExcel,
   nombreArchivoCargado,
   setNombreArchivoCargado,
+  controlImportacion,
+  setControlImportacion,
   copiadoId,
   guardandoPedido,
   onVolver,
@@ -159,6 +175,21 @@ export function NuevoPedidoView({
   const [confirmVaciarArticulos, setConfirmVaciarArticulos] = useState<boolean>(false);
   const fileInputListaRef = useRef<HTMLInputElement | null>(null);
   const fueraPlanillaRef = useRef<HTMLFormElement | null>(null);
+  const alertasSectionRef = useRef<HTMLElement | null>(null);
+  const analizandoRef = useRef<boolean>(false);
+  const ultimoArchivoTabularRef = useRef<File | null>(null);
+  const colaArchivosRef = useRef<File[]>([]);
+
+  const [analizandoArchivo, setAnalizandoArchivo] = useState<boolean>(false);
+  const [extrayendoVision, setExtrayendoVision] = useState<boolean>(false);
+  const [archivoReferencia, setArchivoReferencia] = useState<File | null>(null);
+  const [visionDisponibleActual, setVisionDisponibleActual] = useState<boolean>(false);
+  const [importacionPendiente, setImportacionPendiente] = useState<{
+    res: ResultadoAnalisisArchivo;
+    file: File;
+  } | null>(null);
+  const [duplicadoPendiente, setDuplicadoPendiente] = useState<Pedido | null>(null);
+  const [duplicadoConfirmado, setDuplicadoConfirmado] = useState<boolean>(false);
 
   // Estado formulario "+ Producto fuera de planilla"
   const [mostrarFueraPlanilla, setMostrarFueraPlanilla] = useState<boolean>(false);
@@ -379,26 +410,283 @@ export function NuevoPedidoView({
     setCantidadesManuales({});
     limpiarEstadoAlertas();
     setNombreArchivoCargado('');
+    setControlImportacion(null);
+    colaArchivosRef.current = [];
+    setImportacionPendiente(null);
+    setArchivoReferencia(null);
+    setVisionDisponibleActual(false);
+    setDuplicadoPendiente(null);
+    setDuplicadoConfirmado(false);
+    ultimoArchivoTabularRef.current = null;
     setSoloCargados(false);
     setConfirmDescartar(false);
     setConfirmVaciarArticulos(false);
     onNotify('Borrador descartado.', 'neutral');
   };
 
-  const handleArchivoLista006 = async (file: File): Promise<void> => {
-    try {
+  useEffect(() => {
+    setDuplicadoPendiente(null);
+    setDuplicadoConfirmado(false);
+  }, [form.cliente, form.observaciones, lineasBorrador]);
+
+  const analizarArchivoIndividual = async (
+    file: File,
+    hojaSeleccionada?: string
+  ): Promise<ResultadoAnalisisArchivo | null> => {
+    if (file.size === 0) {
+      onNotify(`El archivo "${file.name}" está vacío.`, 'red');
+      return null;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      onNotify(`"${file.name}" supera el límite máximo permitido de 10 MB.`, 'red');
+      return null;
+    }
+
+    const ext = file.name.split('.').pop()?.toLowerCase() ?? '';
+    const esPlanillaPorExt = ext === 'xlsx' || ext === 'xls' || ext === 'csv';
+    if (esPlanillaPorExt && file.size > 4 * 1024 * 1024) {
       const buffer = await file.arrayBuffer();
-      const res = parsearExcelLista006(buffer, file.name, catalogoCompleto);
-      if (!res.ok) {
-        onNotify(res.errorFatal ?? 'Archivo inválido.', 'red');
-        return;
+      return analizarPlanilla({
+        buffer,
+        nombre: file.name,
+        catalogo: catalogoCompleto,
+        hojaSeleccionada
+      });
+    }
+
+    const fd = new FormData();
+    fd.append('archivo', file);
+    if (hojaSeleccionada) fd.append('hoja', hojaSeleccionada);
+
+    const resp = await fetch('/api/import/analizar', { method: 'POST', body: fd });
+    const data = (await resp.json().catch(() => null)) as
+      | (ResultadoAnalisisArchivo & { error?: string })
+      | null;
+
+    if (!resp.ok || !data) {
+      onNotify(data?.error ?? `No se pudo analizar "${file.name}".`, 'red');
+      return null;
+    }
+    return data;
+  };
+
+  const aplicarDatosCabeceraImport = (
+    datos: DatosClienteDetectados | null
+  ): CampoAutocompletadoImport[] => {
+    if (!datos) return [];
+    const registrados: CampoAutocompletadoImport[] = [];
+
+    const obsExtraPartes: string[] = [];
+    if (datos.observacionesSugeridas) obsExtraPartes.push(datos.observacionesSugeridas);
+    if (datos.transporte && !datos.observacionesSugeridas?.includes(datos.transporte)) {
+      obsExtraPartes.push(`Transporte: ${datos.transporte}`);
+    }
+    if (datos.cuit && !datos.observacionesSugeridas?.includes(datos.cuit)) {
+      obsExtraPartes.push(`CUIT: ${datos.cuit}`);
+    }
+    if (datos.domicilioEntrega && !datos.observacionesSugeridas?.includes(datos.domicilioEntrega)) {
+      obsExtraPartes.push(`Entrega: ${datos.domicilioEntrega}`);
+    }
+
+    setForm((prev) => {
+      const next = { ...prev };
+
+      if (datos.cliente) {
+        if (!prev.cliente.trim()) {
+          next.cliente = datos.cliente;
+          registrados.push({ campo: 'cliente', valorAnterior: '', valorNuevo: datos.cliente });
+        } else if (normalizarTexto(prev.cliente) !== normalizarTexto(datos.cliente)) {
+          registrados.push({
+            campo: 'cliente',
+            valorAnterior: prev.cliente,
+            valorNuevo: datos.cliente
+          });
+        }
       }
-      const mapaManual: Record<string, number> = {};
+
+      if (datos.whatsapp) {
+        if (!prev.whatsapp.trim()) {
+          next.whatsapp = datos.whatsapp;
+          registrados.push({ campo: 'whatsapp', valorAnterior: '', valorNuevo: datos.whatsapp });
+        } else if (prev.whatsapp.trim() !== datos.whatsapp.trim()) {
+          registrados.push({
+            campo: 'whatsapp',
+            valorAnterior: prev.whatsapp,
+            valorNuevo: datos.whatsapp
+          });
+        }
+      }
+
+      if (datos.fechaPedido) {
+        if (!prev.fechaPedido.trim()) {
+          next.fechaPedido = datos.fechaPedido;
+          registrados.push({
+            campo: 'fechaPedido',
+            valorAnterior: '',
+            valorNuevo: datos.fechaPedido
+          });
+        } else if (prev.fechaPedido !== datos.fechaPedido) {
+          registrados.push({
+            campo: 'fechaPedido',
+            valorAnterior: prev.fechaPedido,
+            valorNuevo: datos.fechaPedido
+          });
+        }
+      }
+
+      if (esAdmin && datos.descuentoPorc !== undefined && datos.descuentoPorc > 0) {
+        if (prev.descuentoPorc === 0) {
+          next.descuentoPorc = datos.descuentoPorc;
+          registrados.push({
+            campo: 'descuentoPorc',
+            valorAnterior: '',
+            valorNuevo: `${datos.descuentoPorc}%`
+          });
+        } else if (prev.descuentoPorc !== datos.descuentoPorc) {
+          registrados.push({
+            campo: 'descuentoPorc',
+            valorAnterior: `${prev.descuentoPorc}%`,
+            valorNuevo: `${datos.descuentoPorc}%`
+          });
+        }
+      }
+
+      if (obsExtraPartes.length > 0) {
+        const obsNuevoTexto = obsExtraPartes.join(' · ');
+        const normActual = normalizarTexto(prev.observaciones);
+        const piezasNuevas = obsExtraPartes.filter((p) => !normActual.includes(normalizarTexto(p)));
+        if (piezasNuevas.length > 0) {
+          const combinado = prev.observaciones.trim()
+            ? `${prev.observaciones.trim()} · ${piezasNuevas.join(' · ')}`
+            : obsNuevoTexto;
+          next.observaciones = combinado;
+          registrados.push({
+            campo: 'observaciones',
+            valorAnterior: prev.observaciones,
+            valorNuevo: piezasNuevas.join(' · ')
+          });
+        }
+      }
+
+      return next;
+    });
+
+    return registrados;
+  };
+
+  const aplicarResultadoAnalisis = (
+    res: ResultadoAnalisisArchivo,
+    file: File,
+    modo?: 'reemplazar' | 'sumar'
+  ): 'continuar' | 'pausar' => {
+    if (!res.ok || res.tipoArchivo === 'PLANILLA_GENERAL_ADMIN' || res.tipoArchivo === 'NO_COMPATIBLE') {
+      onNotify(res.errorFatal ?? 'Archivo incompatible.', 'red');
+      return 'continuar';
+    }
+
+    const tieneArticulosOAlertas = res.lineas.length > 0 || res.advertencias.length > 0;
+    if (tieneArticulosOAlertas && lineasBorrador.length > 0 && !modo) {
+      setImportacionPendiente({ res, file });
+      return 'pausar';
+    }
+
+    const camposAutocompletados = aplicarDatosCabeceraImport(res.datosDetectados);
+
+    if (res.tipoArchivo === 'ALTA_CLIENTE_DOCX') {
+      setControlImportacion((prev) => ({
+        nombreArchivo: prev && lineasBorrador.length > 0 ? prev.nombreArchivo : res.nombreArchivo,
+        tipoArchivo: prev && lineasBorrador.length > 0 ? prev.tipoArchivo : res.tipoArchivo,
+        auditoria: prev && lineasBorrador.length > 0 ? prev.auditoria : res.auditoria,
+        unidadesBaseBorrador: prev ? prev.unidadesBaseBorrador : 0,
+        descuadreConfirmado: prev ? prev.descuadreConfirmado : false,
+        correcciones: prev ? prev.correcciones : [],
+        correccionesRevisadas: prev ? prev.correccionesRevisadas : true,
+        hojasDisponibles: prev ? prev.hojasDisponibles : [],
+        camposAutocompletados: [
+          ...(prev?.camposAutocompletados ?? []).filter(
+            (c) => !camposAutocompletados.some((n) => n.campo === c.campo)
+          ),
+          ...camposAutocompletados
+        ],
+        requiereConfirmacionHumana: prev ? prev.requiereConfirmacionHumana : false,
+        confirmacionHumanaOk: prev ? prev.confirmacionHumanaOk : true,
+        avisos: res.avisos
+      }));
+      onNotify(
+        res.avisos[0] ?? 'Ficha de cliente detectada y aplicada sin modificar artículos.',
+        'green'
+      );
+      return 'continuar';
+    }
+
+    if (res.tipoArchivo === 'IMAGEN_O_PDF_ESCANEADO') {
+      setArchivoReferencia(file);
+      setVisionDisponibleActual(res.visionDisponible);
+      if (!res.requiereConfirmacionHumana) {
+        setControlImportacion((prev) => ({
+          nombreArchivo: res.nombreArchivo,
+          tipoArchivo: prev && lineasBorrador.length > 0 ? prev.tipoArchivo : res.tipoArchivo,
+          auditoria: prev && lineasBorrador.length > 0 ? prev.auditoria : res.auditoria,
+          unidadesBaseBorrador: prev ? prev.unidadesBaseBorrador : 0,
+          descuadreConfirmado: prev ? prev.descuadreConfirmado : false,
+          correcciones: prev ? prev.correcciones : [],
+          correccionesRevisadas: prev ? prev.correccionesRevisadas : true,
+          hojasDisponibles: prev ? prev.hojasDisponibles : [],
+          camposAutocompletados: [
+            ...(prev?.camposAutocompletados ?? []),
+            ...camposAutocompletados
+          ],
+          requiereConfirmacionHumana: false,
+          confirmacionHumanaOk: true,
+          avisos: res.avisos
+        }));
+        onNotify(
+          res.avisos[0] ?? 'Imagen abierta a la derecha como referencia.',
+          'neutral'
+        );
+        return 'continuar';
+      }
+    }
+
+    // Planilla, Pedido PDF, Factura AFIP PDF, Pedido DOCX o extracción de visión con artículos
+    if (
+      res.tipoArchivo === 'LISTA_006' ||
+      res.tipoArchivo === 'PLANILLA_PERSONALIZADA' ||
+      res.tipoArchivo === 'CSV'
+    ) {
+      ultimoArchivoTabularRef.current = file;
+    }
+
+    const basePrev =
+      modo === 'sumar' ? lineasBorrador.reduce((acc, l) => acc + l.cantidadTotal, 0) : 0;
+
+    let siguientesLineas: LineaPedido[];
+    if (modo === 'sumar') {
+      siguientesLineas = [...lineasBorrador];
       for (const l of res.lineas) {
-        mapaManual[l.idGrupo] = l.cantidadTotal;
+        const prod = catalogoCompleto.find((p) => p.idGrupo === l.idGrupo) ?? {
+          idGrupo: l.idGrupo,
+          nombre: l.nombreProducto,
+          rubro: l.rubro,
+          precioNeto: l.precioUnitarioNeto,
+          variantes: l.desglose.map((d) => ({ codigo: d.codigo, etiqueta: d.etiqueta, aliases: [d.codigo] }))
+        };
+        siguientesLineas = aplicarLineaAlBorrador(siguientesLineas, prod, l.cantidadTotal, l.notaCliente);
       }
-      setLineasBorrador(res.lineas);
-      setCantidadesManuales(mapaManual);
+    } else {
+      siguientesLineas = res.lineas;
+    }
+
+    const mapaManual: Record<string, number> = {};
+    for (const l of siguientesLineas) mapaManual[l.idGrupo] = l.cantidadTotal;
+
+    setLineasBorrador(siguientesLineas);
+    setCantidadesManuales(mapaManual);
+
+    if (modo === 'sumar') {
+      setAdvertenciasExcel((prev) => [...prev, ...res.advertencias]);
+      setAvisosPrecio((prev) => [...prev, ...(res.avisosPrecio ?? [])]);
+    } else {
       setAdvertenciasExcel(res.advertencias);
       setAvisosPrecio(res.avisosPrecio ? [...res.avisosPrecio] : []);
       setMostrarDetallePrecios(false);
@@ -410,23 +698,228 @@ export function NuevoPedidoView({
       setAlertaCreandoId(null);
       setAlertaCreandoNota('');
       setFpPrecioExcelHint(null);
-      setNombreArchivoCargado(file.name);
-      if (res.advertencias.length > 0) {
-        onNotify(
-          `Se detectaron ${res.advertencias.length} fila(s) para revisar en el centro de alertas antes de guardar.`,
-          'amber'
-        );
-      } else if (res.avisosPrecio && res.avisosPrecio.length > 0) {
-        onNotify(
-          `${res.lineas.length} artículos leídos de ${file.name} (se aplicaron precios vigentes).`,
-          'green'
-        );
-      } else {
-        onNotify(`${res.lineas.length} artículos leídos de ${file.name}.`, 'green');
-      }
-    } catch {
-      onNotify('No se pudo leer el archivo seleccionado.', 'red');
     }
+
+    setNombreArchivoCargado(file.name);
+    setControlImportacion({
+      nombreArchivo: res.nombreArchivo,
+      tipoArchivo: res.tipoArchivo,
+      auditoria: res.auditoria,
+      unidadesBaseBorrador: basePrev,
+      descuadreConfirmado: false,
+      correcciones: res.correccionesAutomaticas,
+      correccionesRevisadas: res.correccionesAutomaticas.length === 0,
+      hojasDisponibles: res.hojasDisponibles,
+      camposAutocompletados,
+      requiereConfirmacionHumana: res.requiereConfirmacionHumana,
+      confirmacionHumanaOk: !res.requiereConfirmacionHumana,
+      avisos: res.avisos
+    });
+
+    if (res.auditoria.estadoIntegridad === 'BLOQUEADO') {
+      onNotify(
+        res.auditoria.motivos[0] ?? 'Diferencia detectada en el control de totales. Revisala antes de guardar.',
+        'red'
+      );
+    } else if (res.advertencias.length > 0) {
+      onNotify(
+        `Se detectaron ${res.advertencias.length} fila(s) para revisar en el centro de alertas antes de guardar.`,
+        'amber'
+      );
+    } else {
+      onNotify(`${res.lineas.length} artículos leídos de ${file.name}.`, 'green');
+    }
+
+    return 'continuar';
+  };
+
+  const drenarColaArchivos = async (pendientes: File[]): Promise<void> => {
+    if (analizandoRef.current) return;
+    analizandoRef.current = true;
+    setAnalizandoArchivo(true);
+    try {
+      const rest = [...pendientes];
+      while (rest.length > 0) {
+        const nextFile = rest.shift()!;
+        const res = await analizarArchivoIndividual(nextFile);
+        if (!res) continue;
+        const estado = aplicarResultadoAnalisis(res, nextFile);
+        if (estado === 'pausar') {
+          colaArchivosRef.current = rest;
+          return;
+        }
+      }
+      colaArchivosRef.current = [];
+    } catch {
+      onNotify('No se pudo leer uno de los archivos seleccionados.', 'red');
+    } finally {
+      analizandoRef.current = false;
+      setAnalizandoArchivo(false);
+    }
+  };
+
+  const procesarArchivos = async (files: FileList | ReadonlyArray<File>): Promise<void> => {
+    const lista = Array.from(files);
+    if (lista.length === 0) return;
+    if (analizandoRef.current) return;
+    await drenarColaArchivos(lista);
+  };
+
+  const handleResolverImportacionPendiente = async (decision: 'reemplazar' | 'sumar' | 'cancelar'): Promise<void> => {
+    const actual = importacionPendiente;
+    setImportacionPendiente(null);
+    if (actual && decision !== 'cancelar') {
+      aplicarResultadoAnalisis(actual.res, actual.file, decision);
+    }
+    if (colaArchivosRef.current.length > 0) {
+      const rest = [...colaArchivosRef.current];
+      colaArchivosRef.current = [];
+      await drenarColaArchivos(rest);
+    }
+  };
+
+  const handleCambiarHoja = async (nombreHoja: string): Promise<void> => {
+    const file = ultimoArchivoTabularRef.current;
+    if (!file || analizandoRef.current) return;
+    analizandoRef.current = true;
+    setAnalizandoArchivo(true);
+    try {
+      const res = await analizarArchivoIndividual(file, nombreHoja);
+      if (res) {
+        const modoSwap =
+          controlImportacion && controlImportacion.unidadesBaseBorrador === 0
+            ? 'reemplazar'
+            : undefined;
+        aplicarResultadoAnalisis(res, file, modoSwap);
+      }
+    } finally {
+      analizandoRef.current = false;
+      setAnalizandoArchivo(false);
+    }
+  };
+
+  const handleExtraerConVision = async (): Promise<void> => {
+    if (!archivoReferencia || extrayendoVision) return;
+    setExtrayendoVision(true);
+    try {
+      const fd = new FormData();
+      fd.append('archivo', archivoReferencia);
+      fd.append('modo', 'vision');
+      const resp = await fetch('/api/import/analizar', { method: 'POST', body: fd });
+      const data = (await resp.json().catch(() => null)) as
+        | (ResultadoAnalisisArchivo & { error?: string })
+        | null;
+      if (!resp.ok || !data) {
+        onNotify(data?.error ?? 'No se pudo extraer información de la imagen.', 'red');
+        return;
+      }
+      aplicarResultadoAnalisis(
+        data,
+        archivoReferencia,
+        lineasBorrador.length > 0 ? undefined : 'reemplazar'
+      );
+    } finally {
+      setExtrayendoVision(false);
+    }
+  };
+
+  const handleDeshacerCampoImport = (campo: CampoAutocompletadoImport['campo']): void => {
+    const entry = controlImportacion?.camposAutocompletados.find((c) => c.campo === campo);
+    if (!entry) return;
+    setForm((prev) => {
+      const next = { ...prev };
+      if (campo === 'cliente') next.cliente = entry.valorAnterior;
+      else if (campo === 'whatsapp') next.whatsapp = entry.valorAnterior;
+      else if (campo === 'observaciones') next.observaciones = entry.valorAnterior;
+      else if (campo === 'fechaPedido') next.fechaPedido = entry.valorAnterior || getTodayISO();
+      else if (campo === 'descuentoPorc' && esAdmin) {
+        next.descuentoPorc = parseFloat(entry.valorAnterior) || 0;
+      }
+      return next;
+    });
+    setControlImportacion((prev) =>
+      prev
+        ? {
+            ...prev,
+            camposAutocompletados: prev.camposAutocompletados.filter((c) => c.campo !== campo)
+          }
+        : null
+    );
+  };
+
+  const handleAplicarCampoImportIgual = (campo: CampoAutocompletadoImport['campo']): void => {
+    const entry = controlImportacion?.camposAutocompletados.find((c) => c.campo === campo);
+    if (!entry) return;
+    setForm((prev) => {
+      const next = { ...prev };
+      if (campo === 'cliente') next.cliente = entry.valorNuevo;
+      else if (campo === 'whatsapp') next.whatsapp = entry.valorNuevo;
+      else if (campo === 'fechaPedido') next.fechaPedido = entry.valorNuevo;
+      else if (campo === 'descuentoPorc' && esAdmin) {
+        next.descuentoPorc = parseFloat(entry.valorNuevo) || 0;
+      }
+      return next;
+    });
+    setControlImportacion((prev) =>
+      prev
+        ? {
+            ...prev,
+            camposAutocompletados: prev.camposAutocompletados.map((c) =>
+              c.campo === campo ? { ...c, valorAnterior: '' } : c
+            )
+          }
+        : null
+    );
+  };
+
+  const handleCambiarCorreccion = (corr: CorreccionAutomatica): void => {
+    const lineaAfectada = lineasBorrador.find(
+      (l) => l.idLinea === corr.lineaId || l.nombreProducto === corr.productoNombre
+    );
+    const qtyAfectada = lineaAfectada?.cantidadTotal ?? 1;
+    if (lineaAfectada) {
+      setLineasBorrador((prev) => prev.filter((l) => l.idLinea !== lineaAfectada.idLinea));
+      setCantidadesManuales((prev) => {
+        const next = { ...prev };
+        delete next[lineaAfectada.idGrupo];
+        return next;
+      });
+    }
+
+    const nuevaAlerta: AdvertenciaExcel = {
+      hoja: corr.hoja,
+      fila: corr.fila,
+      codigo: corr.original,
+      mensaje: `Revisar código original (${corr.original}) con ${qtyAfectada} u.`,
+      id: `${corr.hoja}#${corr.fila}#${corr.original}#CODIGO_DESCONOCIDO`,
+      tipo: 'CODIGO_DESCONOCIDO',
+      codigosDetectados: [corr.original],
+      descripcionExcel: corr.productoNombre,
+      precioExcelReferencia: lineaAfectada?.precioUnitarioNeto ?? null,
+      cantidadDetectada: qtyAfectada,
+      cantidadRaw: String(qtyAfectada),
+      notaDetectada: lineaAfectada?.notaCliente ?? '',
+      productoExistenteIdGrupo: null,
+      sugerenciasCatalogo: sugerirProductosCercanos(
+        corr.original,
+        corr.productoNombre,
+        catalogoCompleto
+      )
+    };
+    setAdvertenciasExcel((prev) => [...prev, nuevaAlerta]);
+    setCorrigiendoAlertaId(nuevaAlerta.id);
+    setControlImportacion((prev) => {
+      if (!prev) return null;
+      const restantes = prev.correcciones.filter((c) => c.id !== corr.id);
+      return {
+        ...prev,
+        correcciones: restantes,
+        correccionesRevisadas: restantes.length === 0
+      };
+    });
+    window.requestAnimationFrame(() => {
+      alertasSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    });
   };
 
   const handleCargarEjemploLista006 = (): void => {
@@ -937,19 +1430,75 @@ export function NuevoPedidoView({
     );
   };
 
-  const handleSubmit = async (): Promise<void> => {
+  const hayDescuadreVivo = useMemo(() => {
+    if (!controlImportacion) return false;
+    if (controlImportacion.tipoArchivo === 'ALTA_CLIENTE_DOCX') return false;
+    const unidadesVivas = Math.max(
+      0,
+      totalesBorrador.totalUnidades - controlImportacion.unidadesBaseBorrador
+    );
+    const declaradas = controlImportacion.auditoria.unidadesDeclaradasArchivo;
+    if (
+      controlImportacion.tipoArchivo === 'IMAGEN_O_PDF_ESCANEADO' &&
+      unidadesVivas === 0 &&
+      declaradas === null
+    ) {
+      return false;
+    }
+    const difU = declaradas !== null && unidadesVivas !== declaradas;
+    const difImp =
+      controlImportacion.auditoria.diferenciaImporte !== null &&
+      Math.abs(controlImportacion.auditoria.diferenciaImporte) > 1;
+    return difU || difImp;
+  }, [controlImportacion, totalesBorrador.totalUnidades]);
+
+  const handleSubmit = async (bypassDup = false): Promise<void> => {
     if (guardandoPedido) return;
     if (!form.cliente.trim()) {
       onNotify('Ingresá el nombre del cliente o negocio.', 'amber');
       return;
     }
     if (lineasBorrador.length === 0) {
-      onNotify('Cargá al menos un artículo desde Excel o en carga manual.', 'amber');
+      onNotify('Cargá al menos un artículo desde un archivo o en carga manual.', 'amber');
       return;
     }
     if (advertenciasExcel.length > 0) {
-      onNotify('Confirmá o descartá las alertas de Excel antes de guardar.', 'red');
+      onNotify('Confirmá o descartá las alertas del archivo antes de guardar.', 'red');
       return;
+    }
+    if (hayDescuadreVivo && controlImportacion && !controlImportacion.descuadreConfirmado) {
+      onNotify('Confirmá el control de totales antes de guardar.', 'red');
+      return;
+    }
+    if (
+      controlImportacion &&
+      controlImportacion.correcciones.length > 0 &&
+      !controlImportacion.correccionesRevisadas
+    ) {
+      onNotify('Revisá las correcciones automáticas antes de guardar.', 'amber');
+      return;
+    }
+    if (
+      controlImportacion &&
+      controlImportacion.requiereConfirmacionHumana &&
+      !controlImportacion.confirmacionHumanaOk
+    ) {
+      onNotify('Confirmá los datos extraídos de la imagen antes de guardar.', 'amber');
+      return;
+    }
+
+    if (!bypassDup && !duplicadoConfirmado) {
+      const dup = detectarPedidoDuplicado({
+        cliente: form.cliente.trim(),
+        unidades: totalesBorrador.totalUnidades,
+        observaciones: form.observaciones.trim(),
+        ahora: Date.now(),
+        pedidos: pedidosRecientes
+      });
+      if (dup) {
+        setDuplicadoPendiente(dup);
+        return;
+      }
     }
 
     const totalEst = totalesBorrador.totalFacturado;
@@ -1003,7 +1552,24 @@ export function NuevoPedidoView({
   const faltantesParaGuardar: string[] = [];
   if (!form.cliente.trim()) faltantesParaGuardar.push('Falta nombre del cliente');
   if (lineasBorrador.length === 0) faltantesParaGuardar.push('Cargá al menos 1 artículo');
-  if (advertenciasExcel.length > 0) faltantesParaGuardar.push('Revisá las alertas del Excel');
+  if (advertenciasExcel.length > 0) faltantesParaGuardar.push('Revisá las alertas pendientes');
+  if (hayDescuadreVivo && controlImportacion && !controlImportacion.descuadreConfirmado) {
+    faltantesParaGuardar.push('Confirmá la diferencia en el control de totales');
+  }
+  if (
+    controlImportacion &&
+    controlImportacion.correcciones.length > 0 &&
+    !controlImportacion.correccionesRevisadas
+  ) {
+    faltantesParaGuardar.push('Revisá las correcciones sugeridas');
+  }
+  if (
+    controlImportacion &&
+    controlImportacion.requiereConfirmacionHumana &&
+    !controlImportacion.confirmacionHumanaOk
+  ) {
+    faltantesParaGuardar.push('Confirmá los datos de la imagen');
+  }
 
   const msgReclamoBorrador = generarMensajeWhatsApp(
     form.cliente.trim(),
@@ -1014,24 +1580,33 @@ export function NuevoPedidoView({
   const waUrlBorrador = buildWhatsAppUrl(form.whatsapp, msgReclamoBorrador);
 
   return (
-    <div className="max-w-2xl mx-auto space-y-6">
-      <datalist id={clientesListId}>
-        {clientesConocidos.map((c) => (
-          <option key={c.cliente} value={c.cliente} />
-        ))}
-      </datalist>
+    <div
+      className={
+        archivoReferencia
+          ? 'max-w-6xl mx-auto lg:grid lg:grid-cols-[minmax(0,1fr)_420px] lg:gap-6 items-start space-y-6 lg:space-y-0'
+          : 'max-w-2xl mx-auto space-y-6'
+      }
+    >
+      <div className="space-y-6">
+        <datalist id={clientesListId}>
+          {clientesConocidos.map((c) => (
+            <option key={c.cliente} value={c.cliente} />
+          ))}
+        </datalist>
 
-      <input
-        ref={fileInputListaRef}
-        type="file"
-        accept=".xlsx,.xls,.csv"
-        className="hidden"
-        onChange={(e) => {
-          const file = e.target.files?.[0];
-          if (file) void handleArchivoLista006(file);
-          e.target.value = '';
-        }}
-      />
+        <input
+          ref={fileInputListaRef}
+          type="file"
+          multiple
+          accept=".xlsx,.xls,.csv,.pdf,.docx,.jpg,.jpeg,.png,.webp"
+          className="hidden"
+          onChange={(e) => {
+            if (e.target.files && e.target.files.length > 0) {
+              void procesarArchivos(e.target.files);
+            }
+            e.target.value = '';
+          }}
+        />
 
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2.5">
@@ -1313,32 +1888,109 @@ export function NuevoPedidoView({
         </div>
 
         {!modoCargaManual ? (
-          <div
-            onDragOver={(e) => {
-              e.preventDefault();
-              setArrastrandoArchivo(true);
-            }}
-            onDragLeave={() => setArrastrandoArchivo(false)}
-            onDrop={(e) => {
-              e.preventDefault();
-              setArrastrandoArchivo(false);
-              const file = e.dataTransfer.files?.[0];
-              if (file) void handleArchivoLista006(file);
-            }}
-            onClick={() => fileInputListaRef.current?.click()}
-            className={`cursor-pointer rounded-2xl border-2 border-dashed px-6 py-8 text-center transition-colors ${
-              arrastrandoArchivo
-                ? 'border-[#F4B6CE] bg-pink-50/40 dark:border-[#F4B6CE] dark:bg-[#F4B6CE]/10'
-                : 'border-zinc-200 hover:border-zinc-300 bg-[#FAFAFA] dark:bg-[#101014] dark:border-[#2E2E36] dark:hover:border-[#F4B6CE]/50'
-            }`}
-          >
-            <FileSpreadsheet className="w-7 h-7 mx-auto text-zinc-400 dark:text-zinc-500" strokeWidth={1.5} />
-            <p className="mt-2.5 text-sm font-medium text-[#111111] dark:text-[#F4F4F5]">
-              {nombreArchivoCargado
-                ? `Cargado: ${nombreArchivoCargado}`
-                : 'Arrastrá la planilla LISTA N° 006 o hacé clic para elegir'}
-            </p>
-            <p className="mt-1 text-xs text-zinc-400 dark:text-zinc-500">Soporta .xlsx, .xls y .csv · Lectura exacta inmediata</p>
+          <div className="space-y-3">
+            <div
+              onDragOver={(e) => {
+                e.preventDefault();
+                setArrastrandoArchivo(true);
+              }}
+              onDragLeave={() => setArrastrandoArchivo(false)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setArrastrandoArchivo(false);
+                if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                  void procesarArchivos(e.dataTransfer.files);
+                }
+              }}
+              onClick={() => {
+                if (!analizandoArchivo) fileInputListaRef.current?.click();
+              }}
+              className={`cursor-pointer rounded-2xl border-2 border-dashed px-6 py-8 text-center transition-colors duration-150 ${
+                analizandoArchivo ? 'opacity-65 pointer-events-none' : ''
+              } ${
+                arrastrandoArchivo
+                  ? 'border-[#F4B6CE] bg-pink-50/40 dark:border-[#F4B6CE] dark:bg-[#F4B6CE]/10'
+                  : 'border-zinc-200 hover:border-zinc-300 bg-[#FAFAFA] dark:bg-[#101014] dark:border-[#2E2E36] dark:hover:border-[#F4B6CE]/50'
+              }`}
+            >
+              <FileSpreadsheet className="w-7 h-7 mx-auto text-zinc-400 dark:text-zinc-500" strokeWidth={1.5} />
+              <p className="mt-2.5 text-sm font-medium text-[#111111] dark:text-[#F4F4F5]">
+                {analizandoArchivo
+                  ? 'Analizando archivo...'
+                  : nombreArchivoCargado
+                    ? `Cargado: ${nombreArchivoCargado}`
+                    : 'Arrastrá el pedido del cliente o hacé clic para elegir'}
+              </p>
+              <p className="mt-1 text-xs text-zinc-400 dark:text-zinc-500">
+                Soporta Excel, CSV, Factura AFIP o Pedido PDF, Alta en Word (.docx) e imágenes
+              </p>
+            </div>
+
+            {importacionPendiente && (
+              <div className="rounded-xl border border-amber-200/80 bg-amber-50/70 dark:bg-amber-500/10 dark:border-amber-500/25 p-3.5 text-xs space-y-2">
+                <div className="font-medium text-amber-900 dark:text-amber-200">
+                  Ya tenés {lineasBorrador.length} ítems cargados. ¿Qué querés hacer con &ldquo;{importacionPendiente.file.name}&rdquo; ({importacionPendiente.res.lineas.length} ítems)?
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void handleResolverImportacionPendiente('reemplazar')}
+                    className="px-3 py-1.5 rounded-full font-medium bg-zinc-900 text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-950 transition-colors duration-150 active:scale-[0.98]"
+                  >
+                    Reemplazar artículos actuales
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleResolverImportacionPendiente('sumar')}
+                    className="px-3 py-1.5 rounded-full font-medium bg-white border border-zinc-200 text-[#111111] hover:bg-zinc-50 dark:bg-[#1B1B1F] dark:border-[#2E2E35] dark:text-[#F4F4F5] transition-colors duration-150 active:scale-[0.98]"
+                  >
+                    Sumar a los actuales
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleResolverImportacionPendiente('cancelar')}
+                    className="px-2.5 py-1.5 text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-white"
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {controlImportacion && (
+              <PanelVerificacionImportacion
+                control={controlImportacion}
+                unidadesActualesBorrador={totalesBorrador.totalUnidades}
+                alertasActivasCount={advertenciasExcel.length}
+                visionDisponible={visionDisponibleActual}
+                extrayendoVision={extrayendoVision}
+                onCambiarHoja={(nombreHoja) => void handleCambiarHoja(nombreHoja)}
+                onConfirmarDescuadre={() =>
+                  setControlImportacion((prev) =>
+                    prev ? { ...prev, descuadreConfirmado: true } : null
+                  )
+                }
+                onIrAAlertas={() =>
+                  alertasSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+                }
+                onDeshacerCampo={handleDeshacerCampoImport}
+                onAplicarCampoIgual={handleAplicarCampoImportIgual}
+                onAprobarCorrecciones={() =>
+                  setControlImportacion((prev) =>
+                    prev ? { ...prev, correccionesRevisadas: true } : null
+                  )
+                }
+                onCambiarCorreccion={handleCambiarCorreccion}
+                onExtraerConVision={
+                  visionDisponibleActual ? () => void handleExtraerConVision() : undefined
+                }
+                onConfirmarDatosVision={() =>
+                  setControlImportacion((prev) =>
+                    prev ? { ...prev, confirmacionHumanaOk: true } : null
+                  )
+                }
+              />
+            )}
           </div>
         ) : (
           <div className="space-y-3">
@@ -1439,6 +2091,7 @@ export function NuevoPedidoView({
                     setCantidadesManuales({});
                     limpiarEstadoAlertas();
                     setNombreArchivoCargado('');
+                    setControlImportacion(null);
                     setSoloCargados(false);
                     setConfirmVaciarArticulos(false);
                   }}
@@ -1738,7 +2391,10 @@ export function NuevoPedidoView({
       </section>
 
       {(advertenciasExcel.length > 0 || alertasIgnoradas.length > 0) && (
-        <section className="bg-red-50/70 border border-red-200 dark:bg-red-500/10 dark:border-red-500/25 rounded-2xl p-5 space-y-3.5">
+        <section
+          ref={alertasSectionRef}
+          className="bg-red-50/70 border border-red-200 dark:bg-red-500/10 dark:border-red-500/25 rounded-2xl p-5 space-y-3.5"
+        >
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2 text-xs font-semibold text-red-800 dark:text-red-300">
               <AlertTriangle className="w-4 h-4 text-red-600 dark:text-red-400 shrink-0" strokeWidth={1.75} />
@@ -1824,7 +2480,9 @@ export function NuevoPedidoView({
                             Hoja {adv.hoja} · Fila {adv.fila}
                           </span>
                           <span className="px-2 py-0.5 rounded-md bg-zinc-100 text-zinc-700 dark:bg-[#2A2A32] dark:text-zinc-200 font-medium uppercase">
-                            Cód. {adv.codigo || '—'}
+                            {adv.tipo === 'FILA_SIN_CODIGO'
+                              ? 'Fila sin código'
+                              : `Cód. ${adv.codigo || '—'}`}
                           </span>
                           {adv.cantidadDetectada !== null && (
                             <span className="px-2 py-0.5 rounded-md bg-[#FCE7F3] text-[#111111] dark:bg-[#F4B6CE]/15 dark:text-[#FCE7F3] font-semibold">
@@ -1846,7 +2504,9 @@ export function NuevoPedidoView({
                           <span className="text-red-600 dark:text-red-400">
                             {adv.tipo === 'CODIGO_DESCONOCIDO'
                               ? 'Código no reconocido en el catálogo vigente'
-                              : adv.mensaje}
+                              : adv.tipo === 'FILA_SIN_CODIGO'
+                                ? 'Fila con cantidad detectada pero sin código de artículo'
+                                : adv.mensaje}
                           </span>
                           {adv.notaDetectada && (
                             <span className="text-zinc-500 dark:text-zinc-400">
@@ -1856,7 +2516,7 @@ export function NuevoPedidoView({
                         </div>
                       </div>
 
-                      {adv.tipo === 'CODIGO_DESCONOCIDO' && (
+                      {(adv.tipo === 'CODIGO_DESCONOCIDO' || adv.tipo === 'FILA_SIN_CODIGO') && (
                         <div className="flex flex-wrap items-center gap-1.5 shrink-0">
                           <button
                             type="button"
@@ -1932,7 +2592,7 @@ export function NuevoPedidoView({
                       </div>
                     )}
 
-                    {adv.tipo === 'CODIGO_DESCONOCIDO' && estaCorrigiendo && (
+                    {(adv.tipo === 'CODIGO_DESCONOCIDO' || adv.tipo === 'FILA_SIN_CODIGO') && estaCorrigiendo && (
                       <div className="pt-2.5 border-t border-zinc-200/70 dark:border-[#26262B] space-y-2.5">
                         {adv.sugerenciasCatalogo.length > 0 && (
                           <div className="space-y-1.5">
@@ -2318,6 +2978,35 @@ export function NuevoPedidoView({
             </p>
           )}
 
+          {duplicadoPendiente && (
+            <div className="rounded-xl border border-amber-200/80 bg-amber-50/70 dark:bg-amber-500/10 dark:border-amber-500/25 p-3.5 text-xs space-y-2.5">
+              <div className="font-medium text-amber-900 dark:text-amber-200">
+                Ya hay un pedido muy parecido para este cliente (#{duplicadoPendiente.numeroPedido} ·{' '}
+                {duplicadoPendiente.lineas.reduce((s, l) => s + l.cantidadTotal, 0)} u.). ¿Seguro que querés guardarlo como nuevo?
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDuplicadoConfirmado(true);
+                    setDuplicadoPendiente(null);
+                    void handleSubmit(true);
+                  }}
+                  className="px-3.5 py-1.5 rounded-full font-medium bg-zinc-900 text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-950 transition-colors duration-150 active:scale-[0.98]"
+                >
+                  Guardar igual
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDuplicadoPendiente(null)}
+                  className="px-3 py-1.5 text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-white"
+                >
+                  Cancelar
+                </button>
+              </div>
+            </div>
+          )}
+
           <button
             type="button"
             disabled={guardandoPedido || faltantesParaGuardar.length > 0}
@@ -2327,6 +3016,14 @@ export function NuevoPedidoView({
             {guardandoPedido ? 'Guardando...' : 'Guardar pedido'}
           </button>
         </section>
+      )}
+      </div>
+
+      {archivoReferencia && (
+        <VisorReferencia
+          archivo={archivoReferencia}
+          onCerrar={() => setArchivoReferencia(null)}
+        />
       )}
     </div>
   );

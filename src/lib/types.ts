@@ -203,7 +203,72 @@ export interface ResumenFinanciero {
   faltaPago: number;
 }
 
-export type TipoAdvertenciaExcel = 'CODIGO_DESCONOCIDO' | 'CANTIDAD_INVALIDA';
+export type TipoAdvertenciaExcel = 'CODIGO_DESCONOCIDO' | 'CANTIDAD_INVALIDA' | 'FILA_SIN_CODIGO';
+
+export type TipoArchivoDetectado =
+  | 'LISTA_006'
+  | 'PLANILLA_PERSONALIZADA'
+  | 'CSV'
+  | 'FACTURA_AFIP_PDF'
+  | 'PEDIDO_PDF'
+  | 'ALTA_CLIENTE_DOCX'
+  | 'PEDIDO_DOCX'
+  | 'IMAGEN_O_PDF_ESCANEADO'
+  | 'PLANILLA_GENERAL_ADMIN'
+  | 'NO_COMPATIBLE';
+
+export type EstadoIntegridad = 'EXACTO' | 'REVISAR' | 'BLOQUEADO';
+
+export interface AuditoriaLectura {
+  unidadesLeidas: number;
+  unidadesDeclaradasArchivo: number | null;
+  diferenciaUnidades: number | null;
+  unidadesEnAlertas: number;
+  subtotalNetoCalculado: number;
+  totalDeclaradoArchivo: number | null;
+  diferenciaImporte: number | null;
+  filasOmitidasConDatos: number;
+  estadoIntegridad: EstadoIntegridad;
+  motivos: string[];
+}
+
+export interface CorreccionAutomatica {
+  id: string;
+  hoja: string;
+  fila: number;
+  original: string;
+  corregidoA: string;
+  productoNombre: string;
+  motivo: string;
+  lineaId: string;
+}
+
+export interface HojaDisponible {
+  nombre: string;
+  lineas: number;
+  unidades: number;
+  seleccionada: boolean;
+}
+
+export interface DatosClienteDetectados {
+  cliente?: string;
+  cuit?: string;
+  whatsapp?: string;
+  email?: string;
+  transporte?: string;
+  descuentoPorc?: number;
+  fechaPedido?: string;
+  numeroComprobante?: string;
+  tipoComprobante?: string;
+  domicilio?: string;
+  domicilioEntrega?: string;
+  horarioRecepcion?: string;
+  condicionIva?: string;
+  condicionPago?: string;
+  contacto?: string;
+  observacionesSugeridas?: string;
+  origen: 'ARCHIVO' | 'NOMBRE_ARCHIVO' | 'FACTURA' | 'FICHA_ALTA' | 'IMAGEN';
+}
 
 export interface SugerenciaProductoCatalogo {
   idGrupo: string;
@@ -243,6 +308,40 @@ export interface ResultadoParseoLista006 {
   lineas: LineaPedido[];
   advertencias: AdvertenciaExcel[];
   avisosPrecio?: ReadonlyArray<AvisoPrecioExcel>;
+  tipoArchivo: TipoArchivoDetectado;
+  auditoria: AuditoriaLectura;
+  correccionesAutomaticas: ReadonlyArray<CorreccionAutomatica>;
+  hojasDisponibles: ReadonlyArray<HojaDisponible>;
+  datosDetectados: DatosClienteDetectados | null;
+}
+
+export interface ResultadoAnalisisArchivo extends ResultadoParseoLista006 {
+  nombreArchivo: string;
+  avisos: string[];
+  visionDisponible: boolean;
+  requiereConfirmacionHumana: boolean;
+  tipoImagen?: 'FICHA_CLIENTE' | 'COMPROBANTE_PAGO' | 'PEDIDO_ARTICULOS' | 'OTRO';
+}
+
+export interface CampoAutocompletadoImport {
+  campo: 'cliente' | 'whatsapp' | 'observaciones' | 'descuentoPorc' | 'fechaPedido';
+  valorAnterior: string;
+  valorNuevo: string;
+}
+
+export interface ControlImportacionBorrador {
+  nombreArchivo: string;
+  tipoArchivo: TipoArchivoDetectado;
+  auditoria: AuditoriaLectura;
+  unidadesBaseBorrador: number;
+  descuadreConfirmado: boolean;
+  correcciones: ReadonlyArray<CorreccionAutomatica>;
+  correccionesRevisadas: boolean;
+  hojasDisponibles: ReadonlyArray<HojaDisponible>;
+  camposAutocompletados: CampoAutocompletadoImport[];
+  requiereConfirmacionHumana: boolean;
+  confirmacionHumanaOk: boolean;
+  avisos: string[];
 }
 
 export interface ResultadoPickingConsolidado {

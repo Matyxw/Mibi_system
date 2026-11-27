@@ -6,12 +6,17 @@ import {
   CATALOGO_EXTENDIDO_MIBI
 } from './catalogo-mibi';
 import { addDaysISO, formatNowDateTime, getTodayISO, recalcularPedido, round2 } from './finanzas';
+import { normalizarCuit, validarCuit } from './import/numeros';
 import type {
   AdvertenciaExcel,
+  AuditoriaLectura,
   AvisoPrecioExcel,
   CellPrimitive,
+  CorreccionAutomatica,
+  DatosClienteDetectados,
   EstadoArmado,
   EstadoEnvio,
+  HojaDisponible,
   LineaPedido,
   MedioPago,
   Pedido,
@@ -58,8 +63,13 @@ const escapeRegex = (s: string): string =>
 
 const normalizarNotaDesglose = (notaNorm: string): string =>
   notaNorm
+    // "1A3 - 2 / 3A6 - 2" o "1 a 3: 2 / 3 a 6: 2" -> "t1 - 2 / t2 - 2"
+    .replace(/\b(?:de\s*)?1\s*a\s*3\b/gi, 't1')
+    .replace(/\b(?:de\s*)?3\s*a\s*6\b/gi, 't2')
     // "T1 (6562): 4 / T2 (6563): 8" -> "t1 6562: 4 / t2 6563: 8"
     .replace(/\(\s*([a-z0-9\-]+)\s*\)\s*(?::|=|-)?\s*(\d+)/gi, '$1: $2')
+    // "6508 - 2 / 6509 - 1" o "t1 - 2 / t2 - 2" -> "6508: 2 / 6509: 1"
+    .replace(/\b(\d{4}|t[12])\s*-\s*(\d+)\b/gi, '$1: $2')
     // "6504 X2/6505X2" -> "6504: 2/6505: 2"
     .replace(/\b(\d{4})\s*[x*]\s*(\d+)\b/gi, '$1: $2')
     // "R X2/G X2" o "t1x2" -> "r: 2/g: 2"
@@ -337,6 +347,28 @@ export const resolverLinea = (
 
   const tieneRangoT1 = /\b(?:de\s*)?1\s*a\s*3\b|\bt1\b|\btalle\s*1\b/.test(notaNorm);
   const tieneRangoT2 = /\b(?:de\s*)?3\s*a\s*6\b|\bt2\b|\btalle\s*2\b/.test(notaNorm);
+
+  if (/\b(?:de\s*)?1\s*a\s*3\b/.test(notaNorm) && /\b(?:de\s*)?3\s*a\s*6\b/.test(notaNorm)) {
+    const qtyT1R = extraerCantidadVariante(v0, notaParaParseo, codigosProducto);
+    const qtyT2R = extraerCantidadVariante(v1, notaParaParseo, codigosProducto);
+    if (qtyT1R !== null && qtyT2R !== null && qtyT1R + qtyT2R === cantidadTotal) {
+      return {
+        idLinea,
+        idGrupo: producto.idGrupo,
+        nombreProducto: producto.nombre,
+        rubro: producto.rubro,
+        precioUnitarioNeto: producto.precioNeto,
+        cantidadTotal,
+        notaCliente: notaLimpia,
+        estado: 'OK',
+        requiereRevision: false,
+        desglose: [
+          { codigo: v0.codigo, etiqueta: v0.etiqueta, cantidad: qtyT1R },
+          { codigo: v1.codigo, etiqueta: v1.etiqueta, cantidad: qtyT2R }
+        ]
+      };
+    }
+  }
 
   const matchRangoConCantidad = notaNorm.match(
     /^(?:de\s*1\s*a\s*3|1\s*a\s*3|t1|talle\s*1)\s*(?::|=|-)?\s*(\d+)$/
@@ -904,10 +936,983 @@ export const aplicarLineaAlBorrador = (
   return lineasActuales.map((l, i) => (i === idx ? actualizada : l));
 };
 
+export const auditoriaVacia = (estadoIntegridad: AuditoriaLectura['estadoIntegridad'] = 'EXACTO'): AuditoriaLectura => ({
+  unidadesLeidas: 0,
+  unidadesDeclaradasArchivo: null,
+  diferenciaUnidades: null,
+  unidadesEnAlertas: 0,
+  subtotalNetoCalculado: 0,
+  totalDeclaradoArchivo: null,
+  diferenciaImporte: null,
+  filasOmitidasConDatos: 0,
+  estadoIntegridad,
+  motivos: []
+});
+
+const STOPWORDS_IDENTIFICACION = new Set([
+  'de',
+  'del',
+  'la',
+  'el',
+  'los',
+  'las',
+  'con',
+  'sin',
+  'para',
+  'por',
+  'en',
+  'y',
+  'a',
+  't',
+  'talle',
+  'talles',
+  't1',
+  't2',
+  'unico',
+  'kids',
+  'neoprene',
+  'placa',
+  'completa',
+  'flotacion',
+  'retirable',
+  'plastico',
+  'plasticos',
+  'silicona',
+  'lentes',
+  'filtro',
+  'uv',
+  'agua',
+  'arena',
+  'anos',
+  'ano'
+]);
+
+const tokenizarSignificativos = (texto: string): string[] =>
+  Array.from(
+    new Set(
+      normalizarTexto(texto)
+        .split(/[^a-z0-9]+/)
+        .filter((w) => w.length >= 2 && !STOPWORDS_IDENTIFICACION.has(w) && !/^\d+$/.test(w))
+    )
+  );
+
+export const identificarProductoPorDescripcion = (
+  descripcion: string,
+  catalogo: ReadonlyArray<ProductoCatalogo> = CATALOGO_EXTENDIDO_MIBI
+): ProductoCatalogo | null => {
+  const descTokens = new Set(tokenizarSignificativos(descripcion));
+  if (descTokens.size === 0) return null;
+
+  const matches: ProductoCatalogo[] = [];
+  for (const prod of catalogo) {
+    const prodTokens = tokenizarSignificativos(prod.nombre);
+    if (prodTokens.length === 0) continue;
+    if (prodTokens.every((t) => descTokens.has(t))) {
+      matches.push(prod);
+    }
+  }
+  return matches.length === 1 ? matches[0]! : null;
+};
+
+export const corregirCodigoConContexto = (
+  codigo: string,
+  descNorm: string,
+  modeloNorm: string
+): { corregido: string; motivo: string } | null => {
+  if (
+    codigo === '6570' &&
+    descNorm.includes('chaleco') &&
+    (descNorm.includes('bug') || modeloNorm.includes('bug'))
+  ) {
+    return {
+      corregido: '6540',
+      motivo: 'Código 6570 con descripción Chaleco Bug corregido automáticamente a 6540'
+    };
+  }
+  return null;
+};
+
+export interface ResultadoAnalisisTabular {
+  lineas: LineaPedido[];
+  advertencias: AdvertenciaExcel[];
+  avisosPrecio: AvisoPrecioExcel[];
+  correcciones: CorreccionAutomatica[];
+  unidadesDeclaradas: number | null;
+  subtotalDeclarado: number | null;
+  totalConIvaDeclarado: number | null;
+  subtotalCalculado: number;
+  filasOmitidasConDatos: number;
+  descuentoDetectado: number | null;
+  headerRowIdx: number;
+}
+
+const RE_FILA_RESUMEN =
+  /^(?:sub\s*total|total(?:es)?\b|iva\b|impuestos?|descuentos?|bonificaci|neto\b|importe\s+total|total\s+a\s+pagar|saldo|condiciones\s+de\s+venta)/;
+
+const extractNumericFromCell = (raw: CellPrimitive): number | null => {
+  if (raw === null || raw === undefined) return null;
+  if (typeof raw === 'number') return Number.isFinite(raw) ? round2(raw) : null;
+  const s = limpiarTextoInvisible(String(raw));
+  if (!s) return null;
+  const parsed = parsearMontoArgentino(s);
+  return Number.isFinite(parsed) && parsed !== 0 ? parsed : /^0+(?:[.,]0+)?$/.test(s.replace(/\$/g, '').trim()) ? 0 : null;
+};
+
+const rightmostNumeric = (row: CellPrimitive[]): number | null => {
+  for (let c = row.length - 1; c >= 0; c--) {
+    const val = extractNumericFromCell(row[c] ?? null);
+    if (val !== null) return val;
+  }
+  return null;
+};
+
+export const analizarFilasTabulares = (
+  rows: CellPrimitive[][],
+  hoja: string,
+  ctx: {
+    catalogoPorCodigo: ReadonlyMap<string, ProductoCatalogo>;
+    catalogoUnificado: ReadonlyArray<ProductoCatalogo>;
+    fileName: string;
+  }
+): ResultadoAnalisisTabular => {
+  const { catalogoPorCodigo, catalogoUnificado } = ctx;
+  const advertencias: AdvertenciaExcel[] = [];
+  const avisosPrecioMap = new Map<string, AvisoPrecioExcel>();
+  const correcciones: CorreccionAutomatica[] = [];
+  const correccionesPendientesLineaId: Array<{ corrIdx: number; idGrupo: string }> = [];
+  let lineasAcumuladas: LineaPedido[] = [];
+
+  let colCodeA = 0;
+  let colCodeEnd = 1;
+  let colDesc = 2;
+  let colPrecio = 3;
+  let colQty = 4;
+  let colSubtotal = -1;
+  let colTotalPed = -1;
+  let colT1 = -1;
+  let colT2 = -1;
+  let colNota = -1;
+  let colModelo = -1;
+  let headerDetectado = false;
+  let hadNotaHeader = false;
+  let hadSubtotalHeader = false;
+  let hadPrecioHeader = false;
+  let headerRowIdx = -1;
+
+  let unidadesDeclaradas: number | null = null;
+  let subtotalDeclarado: number | null = null;
+  let totalConIvaDeclarado: number | null = null;
+  let subtotalCalculado = 0;
+  let filasOmitidasConDatos = 0;
+  let descuentoDetectado: number | null = null;
+
+  for (let rIdx = 0; rIdx < rows.length; rIdx++) {
+    const row = rows[rIdx];
+    if (!row) continue;
+    const rowTexts = row.map((c) => (c === null ? '' : normalizarTexto(String(c)).replace(/\s+/g, ' ').trim()));
+
+    const idxCantPed = rowTexts.findIndex(
+      (t) => t.includes('cantidades pedidas') || t.includes('cantidad pedida')
+    );
+    const idxT1 = rowTexts.findIndex((t) => t.includes('pedidas t1') || t === 't1' || t === 'talle 1');
+    const idxT2 = rowTexts.findIndex((t) => t.includes('pedidas t2') || t === 't2' || t === 'talle 2');
+    const idxTotalPed = rowTexts.findIndex((t) => t.includes('total pedido'));
+    const idxCantFallback = rowTexts.findIndex((t) => t === 'cantidad' || t === 'cant');
+    const idxSubtotal = rowTexts.findIndex((t) => t === 'subtotal' || t === 'sub total');
+    const idxTalleColor = rowTexts.findIndex(
+      (t) => t.includes('talles/colores') || t.includes('talles / colores') || t.includes('talles/ colores')
+    );
+    const idxModelo = rowTexts.findIndex((t) => t.includes('modelo') || t === 'talle');
+    const idxDetalleFallback = rowTexts.findIndex((t) => t.includes('detalle') && !t.includes('producto'));
+    const idxCodigos = rowTexts.findIndex((t) => t === 'codigos' || t === 'codigo' || t === 'codigo t1');
+    const idxCodigoT2 = rowTexts.findIndex((t) => t === 'codigo t2');
+    const idxPrecio = rowTexts.findIndex((t) => t === 'precio' || t.includes('precio neto') || t.includes('precio unit'));
+    const idxDesc = rowTexts.findIndex(
+      (t) =>
+        t === 'producto' ||
+        t === 'productos' ||
+        t === 'descripcion' ||
+        t === 'caracteristicas' ||
+        t === 'articulo' ||
+        t === 'articulos' ||
+        t.includes('detalle producto') ||
+        t.includes('detalle del producto')
+    );
+
+    if (
+      idxCantPed !== -1 ||
+      (idxT1 !== -1 && idxT2 !== -1) ||
+      (idxCodigos !== -1 && (idxCantFallback !== -1 || idxPrecio !== -1 || idxDesc !== -1))
+    ) {
+      headerDetectado = true;
+      if (headerRowIdx === -1) headerRowIdx = rIdx;
+      if (idxCodigos !== -1) {
+        colCodeA = idxCodigos;
+        if (idxCodigoT2 !== -1) {
+          colCodeEnd = idxCodigoT2;
+        } else if (idxDesc > idxCodigos + 1) {
+          colCodeEnd = idxDesc - 1;
+        } else if (idxDesc === idxCodigos + 1) {
+          colCodeEnd = idxCodigos;
+        } else {
+          colCodeEnd = idxCodigos + 1;
+        }
+      }
+      if (idxDesc !== -1) {
+        colDesc = idxDesc;
+        if (colCodeEnd >= idxDesc && idxDesc > colCodeA) {
+          colCodeEnd = idxDesc - 1;
+        }
+      }
+      if (idxPrecio !== -1) {
+        colPrecio = idxPrecio;
+        hadPrecioHeader = true;
+      } else if (!hadPrecioHeader) {
+        colPrecio = -1;
+      }
+      if (idxSubtotal !== -1) {
+        colSubtotal = idxSubtotal;
+        hadSubtotalHeader = true;
+      } else if (!hadSubtotalHeader) {
+        colSubtotal = -1;
+      }
+      if (idxT1 !== -1 && idxT2 !== -1) {
+        colT1 = idxT1;
+        colT2 = idxT2;
+        colTotalPed = idxTotalPed;
+        if (idxTotalPed !== -1) colQty = idxTotalPed;
+      } else if (idxCantPed !== -1 || idxCantFallback !== -1 || idxTotalPed !== -1) {
+        colT1 = -1;
+        colT2 = -1;
+        colTotalPed = idxTotalPed;
+        if (idxTotalPed !== -1) colQty = idxTotalPed;
+        else if (idxCantPed !== -1) colQty = idxCantPed;
+        else if (idxCantFallback !== -1) colQty = idxCantFallback;
+      }
+
+      if (idxTalleColor !== -1) {
+        colNota = idxTalleColor;
+        hadNotaHeader = true;
+      } else if (idxDetalleFallback !== -1) {
+        colNota = idxDetalleFallback;
+        hadNotaHeader = true;
+      } else if (!hadNotaHeader) {
+        colNota = -1;
+      }
+
+      if (idxModelo !== -1 && idxModelo !== colNota) colModelo = idxModelo;
+      continue;
+    }
+
+    const extractCode = (txt: string): string | null => {
+      if (!txt || PALABRAS_NO_CODIGO.has(txt)) return null;
+      if (
+        /\b(?:ENERO|FEBRERO|MARZO|ABRIL|MAYO|JUNIO|JULIO|AGOSTO|SEPTIEMBRE|OCTUBRE|NOVIEMBRE|DICIEMBRE)\b/.test(txt) ||
+        /\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}/.test(txt) ||
+        /^LISTA\b/.test(txt)
+      ) {
+        return null;
+      }
+      if (catalogoPorCodigo.has(txt)) return txt;
+      const mNum = txt.match(/\b(\d{4})\b/);
+      if (mNum && mNum[1]) return mNum[1];
+      const mExt = txt.match(/\b([A-Z0-9]{2,12}-[A-Z0-9]{1,12})\b/);
+      if (mExt && mExt[1]) return mExt[1];
+      for (const token of txt.split(/[\s\/,|]+/)) {
+        if (token && catalogoPorCodigo.has(token)) return token;
+      }
+      if (!txt.includes(' ') && /^[A-Z0-9]{3,16}$/.test(txt) && /(?:\d.*){2,}/.test(txt)) {
+        return txt;
+      }
+      return null;
+    };
+
+    // Verificar si la fila es de resumen antes de extraer códigos
+    const resumenTexto = rowTexts.find((t) => RE_FILA_RESUMEN.test(t));
+    let tieneCodigoCatalogoEnRango = false;
+    if (resumenTexto) {
+      for (let cIdx = Math.max(0, colCodeA); cIdx <= Math.min(row.length - 1, colCodeEnd); cIdx++) {
+        const rawCell = row[cIdx];
+        if (rawCell === null || rawCell === undefined) continue;
+        const cleanCell = limpiarTextoInvisible(String(rawCell)).toUpperCase();
+        if (!cleanCell) continue;
+        for (const c4 of cleanCell.matchAll(/\b(\d{4})\b/g)) {
+          if (c4[1] && catalogoPorCodigo.has(c4[1])) {
+            tieneCodigoCatalogoEnRango = true;
+            break;
+          }
+        }
+        if (tieneCodigoCatalogoEnRango) break;
+        const ext = extractCode(cleanCell);
+        if (ext && catalogoPorCodigo.has(ext.toUpperCase())) {
+          tieneCodigoCatalogoEnRango = true;
+          break;
+        }
+      }
+    }
+
+    if (resumenTexto && !tieneCodigoCatalogoEnRango) {
+      if (
+        unidadesDeclaradas === null &&
+        (/^(?:total|total\s+(?:de\s+)?(?:unidades|cantidad(?:es)?|u\.?)|total\s+pedido)$/.test(resumenTexto) ||
+          /^total\s+de\s+unidades\b/.test(resumenTexto))
+      ) {
+        if (colTotalPed !== -1) {
+          const qp = parsearCantidadEstricta(row[colTotalPed] ?? null);
+          if (qp.valid && qp.qty > 0) unidadesDeclaradas = qp.qty;
+        } else if (colT1 !== -1 && colT2 !== -1) {
+          const p1 = parsearCantidadEstricta(row[colT1] ?? null);
+          const p2 = parsearCantidadEstricta(row[colT2] ?? null);
+          if (p1.valid && p2.valid && p1.qty + p2.qty > 0) {
+            unidadesDeclaradas = p1.qty + p2.qty;
+          }
+        } else {
+          const qc = parsearCantidadEstricta(headerDetectado ? (row[colQty] ?? null) : (row[4] ?? null));
+          if (qc.valid && qc.qty > 0) {
+            unidadesDeclaradas = qc.qty;
+          }
+        }
+      } else if (/^(?:sub\s*total|neto|total\s+b)\b/.test(resumenTexto)) {
+        if (subtotalDeclarado === null) {
+          const subCell =
+            colSubtotal >= 0
+              ? extractNumericFromCell(row[colSubtotal] ?? null)
+              : headerDetectado
+                ? null
+                : extractNumericFromCell(row[5] ?? null);
+          const subVal = subCell ?? rightmostNumeric(row);
+          if (subVal !== null && subVal > 0) {
+            subtotalDeclarado = round2(subVal);
+          }
+        }
+      } else if (/^(?:total\s+facturado|importe\s+total|total\s+a\s+pagar)\b/.test(resumenTexto)) {
+        if (totalConIvaDeclarado === null) {
+          const totCell =
+            colSubtotal >= 0
+              ? extractNumericFromCell(row[colSubtotal] ?? null)
+              : headerDetectado
+                ? null
+                : extractNumericFromCell(row[5] ?? null);
+          const totVal = totCell ?? rightmostNumeric(row);
+          if (totVal !== null && totVal > 0) {
+            totalConIvaDeclarado = round2(totVal);
+          }
+        }
+      } else if (/^(?:descuento|bonificaci)/.test(resumenTexto) && descuentoDetectado === null) {
+        for (const t of rowTexts) {
+          const mPct = t.match(/(\d+(?:[.,]\d+)?)\s*%/);
+          if (mPct && mPct[1]) {
+            const pct = parseFloat(mPct[1].replace(',', '.'));
+            if (Number.isFinite(pct) && pct > 0 && pct < 100) {
+              descuentoDetectado = round2(pct);
+              break;
+            }
+          }
+        }
+      }
+      continue;
+    }
+
+    const codigosEnFila: string[] = [];
+    for (let cIdx = Math.max(0, colCodeA); cIdx <= Math.min(row.length - 1, colCodeEnd); cIdx++) {
+      const rawCell = row[cIdx];
+      if (rawCell === null || rawCell === undefined) continue;
+      const cleanCell = limpiarTextoInvisible(String(rawCell)).toUpperCase();
+      if (!cleanCell) continue;
+      if (
+        /\b(?:ENERO|FEBRERO|MARZO|ABRIL|MAYO|JUNIO|JULIO|AGOSTO|SEPTIEMBRE|OCTUBRE|NOVIEMBRE|DICIEMBRE)\b/.test(cleanCell) ||
+        /\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}/.test(cleanCell) ||
+        /^LISTA\b/.test(cleanCell)
+      ) {
+        continue;
+      }
+      for (const c4 of cleanCell.matchAll(/\b(\d{4})\b/g)) {
+        if (c4[1] && !codigosEnFila.includes(c4[1])) codigosEnFila.push(c4[1]);
+      }
+      const extracted = extractCode(cleanCell);
+      if (extracted && !codigosEnFila.includes(extracted)) {
+        codigosEnFila.push(extracted);
+      }
+    }
+
+    const descCell = headerDetectado ? (row[colDesc] ?? null) : (row[2] ?? null);
+    const precioCell = headerDetectado ? (colPrecio >= 0 ? (row[colPrecio] ?? null) : null) : (row[3] ?? null);
+    const notaCell = headerDetectado ? (colNota >= 0 ? (row[colNota] ?? null) : null) : (row[6] ?? null);
+    const modeloCell = headerDetectado && colModelo >= 0 ? (row[colModelo] ?? null) : null;
+    const subtotalCell = headerDetectado
+      ? colSubtotal >= 0
+        ? (row[colSubtotal] ?? null)
+        : null
+      : (row[5] ?? null);
+
+    const usaT1T2SinTotal = colT1 !== -1 && colT2 !== -1 && colTotalPed === -1;
+    const rawT1 = colT1 !== -1 ? (row[colT1] ?? null) : null;
+    const rawT2 = colT2 !== -1 ? (row[colT2] ?? null) : null;
+    const qtyCell = usaT1T2SinTotal
+      ? (() => {
+          const p1 = parsearCantidadEstricta(rawT1);
+          const p2 = parsearCantidadEstricta(rawT2);
+          if (p1.valid && p2.valid) return p1.qty + p2.qty;
+          return rawT1 ?? rawT2;
+        })()
+      : headerDetectado
+        ? (row[colQty] ?? null)
+        : (row[4] ?? null);
+
+    const descripcionExcel =
+      descCell !== null && descCell !== undefined ? limpiarTextoInvisible(String(descCell)) : '';
+    const notaDetectadaRaw =
+      notaCell !== null && notaCell !== undefined ? limpiarTextoInvisible(String(notaCell)) : '';
+    const modeloDetectado =
+      modeloCell !== null && modeloCell !== undefined ? limpiarTextoInvisible(String(modeloCell)) : '';
+    const cantidadRaw =
+      qtyCell !== null && qtyCell !== undefined ? limpiarTextoInvisible(String(qtyCell)) : '';
+
+    let precioExcelReferencia: number | null = null;
+    if (precioCell !== null && precioCell !== undefined && limpiarTextoInvisible(String(precioCell)) !== '') {
+      const parsedPrecio =
+        typeof precioCell === 'number'
+          ? Number.isFinite(precioCell)
+            ? round2(precioCell)
+            : 0
+          : parsearMontoArgentino(precioCell);
+      if (parsedPrecio > 0) {
+        precioExcelReferencia = parsedPrecio;
+      }
+    }
+
+    if (codigosEnFila.length === 0) {
+      if (!headerDetectado) continue;
+      const qtyCheck = parsearCantidadEstricta(qtyCell);
+      const tieneCantidadOTextoDigitos =
+        (qtyCheck.valid && qtyCheck.qty > 0) || (!qtyCheck.valid && /\d/.test(cantidadRaw));
+      const tieneTextoConLetras = rowTexts.some((t) => (t.match(/[a-z]/g)?.length ?? 0) >= 3);
+      const tienePrecioNum = precioExcelReferencia !== null && precioExcelReferencia > 0;
+      if (!tieneCantidadOTextoDigitos || (!tieneTextoConLetras && !tienePrecioNum)) {
+        continue;
+      }
+
+      const qtyParaAlerta = qtyCheck.valid ? qtyCheck.qty : null;
+      const matchUnico = identificarProductoPorDescripcion(descripcionExcel, catalogoUnificado);
+      const cercanas = sugerirProductosCercanos('', descripcionExcel, catalogoUnificado);
+      const sugerencias: SugerenciaProductoCatalogo[] = [];
+      if (matchUnico) {
+        sugerencias.push({
+          idGrupo: matchUnico.idGrupo,
+          nombre: matchUnico.nombre,
+          codigos: matchUnico.variantes.map((v) => v.codigo),
+          rubro: matchUnico.rubro,
+          motivo: 'Coincidencia por descripción'
+        });
+      }
+      for (const s of cercanas) {
+        if (!sugerencias.some((x) => x.idGrupo === s.idGrupo)) {
+          sugerencias.push(s);
+        }
+      }
+
+      const subFilaVal = extractNumericFromCell(subtotalCell);
+      if (subFilaVal !== null && subFilaVal > 0) {
+        subtotalCalculado = round2(subtotalCalculado + subFilaVal);
+      } else if (qtyParaAlerta !== null && qtyParaAlerta > 0 && precioExcelReferencia !== null) {
+        subtotalCalculado = round2(subtotalCalculado + qtyParaAlerta * precioExcelReferencia);
+      }
+
+      filasOmitidasConDatos += 1;
+      advertencias.push({
+        hoja,
+        fila: rIdx + 1,
+        codigo: '',
+        mensaje: `Fila sin código con ${qtyParaAlerta ?? cantidadRaw} u.: "${descripcionExcel || 'Sin descripción'}"`,
+        id: `${hoja}#${rIdx + 1}#FILA_SIN_CODIGO`,
+        tipo: 'FILA_SIN_CODIGO',
+        codigosDetectados: [],
+        descripcionExcel,
+        precioExcelReferencia,
+        cantidadDetectada: qtyParaAlerta,
+        cantidadRaw,
+        notaDetectada: notaDetectadaRaw || modeloDetectado,
+        productoExistenteIdGrupo: null,
+        sugerenciasCatalogo: sugerencias.slice(0, 4)
+      });
+      continue;
+    }
+
+    const descNormLower = normalizarTexto(descripcionExcel);
+    const modeloNormLower = normalizarTexto(modeloDetectado);
+    const correccionesFila: Array<{ original: string; corregido: string; motivo: string }> = [];
+    const codigosCorregidos = codigosEnFila.map((c) => {
+      const corr = corregirCodigoConContexto(c, descNormLower, modeloNormLower);
+      if (corr) {
+        correccionesFila.push({ original: c, corregido: corr.corregido, motivo: corr.motivo });
+        return corr.corregido;
+      }
+      return c;
+    });
+
+    // Regla oficial: ignorar fila duplicada 6545 sin precio ni cantidad
+    if (
+      codigosCorregidos.includes('6545') &&
+      (precioCell === null || String(precioCell).trim() === '') &&
+      (qtyCell === null || String(qtyCell).trim() === '' || Number(qtyCell) === 0)
+    ) {
+      continue;
+    }
+
+    let producto: ProductoCatalogo | undefined;
+    for (const cod of codigosCorregidos) {
+      const encontrado =
+        catalogoPorCodigo.get(cod.toUpperCase()) ??
+        CATALOGO_EXTENDIDO_BY_CODIGO.get(cod) ??
+        CATALOGO_BY_CODIGO.get(cod);
+      if (encontrado) {
+        producto = encontrado;
+        break;
+      }
+    }
+
+    const codigoJoined = codigosCorregidos.join('/');
+    const qtyRes = parsearCantidadEstricta(qtyCell);
+    if (!qtyRes.valid) {
+      advertencias.push({
+        hoja,
+        fila: rIdx + 1,
+        codigo: codigoJoined,
+        mensaje: qtyRes.motivo ?? 'Cantidad inválida',
+        id: `${hoja}#${rIdx + 1}#${codigoJoined}#CANTIDAD_INVALIDA`,
+        tipo: 'CANTIDAD_INVALIDA',
+        codigosDetectados: codigosCorregidos,
+        descripcionExcel,
+        precioExcelReferencia,
+        cantidadDetectada: null,
+        cantidadRaw,
+        notaDetectada: notaDetectadaRaw || modeloDetectado,
+        productoExistenteIdGrupo: producto ? producto.idGrupo : null,
+        sugerenciasCatalogo: producto
+          ? []
+          : sugerirProductosCercanos(codigoJoined, descripcionExcel, catalogoUnificado)
+      });
+      continue;
+    }
+
+    if (qtyRes.qty === 0) continue;
+
+    const subFilaVal = extractNumericFromCell(subtotalCell);
+    if (subFilaVal !== null && subFilaVal > 0) {
+      subtotalCalculado = round2(subtotalCalculado + subFilaVal);
+    } else if (precioExcelReferencia !== null) {
+      subtotalCalculado = round2(subtotalCalculado + qtyRes.qty * precioExcelReferencia);
+    } else if (producto) {
+      subtotalCalculado = round2(subtotalCalculado + qtyRes.qty * producto.precioNeto);
+    }
+
+    if (!producto) {
+      advertencias.push({
+        hoja,
+        fila: rIdx + 1,
+        codigo: codigoJoined,
+        mensaje: `Código desconocido (${codigoJoined}) con cantidad ${qtyRes.qty}`,
+        id: `${hoja}#${rIdx + 1}#${codigoJoined}#CODIGO_DESCONOCIDO`,
+        tipo: 'CODIGO_DESCONOCIDO',
+        codigosDetectados: codigosCorregidos,
+        descripcionExcel,
+        precioExcelReferencia,
+        cantidadDetectada: qtyRes.qty,
+        cantidadRaw,
+        notaDetectada: notaDetectadaRaw || modeloDetectado,
+        productoExistenteIdGrupo: null,
+        sugerenciasCatalogo: sugerirProductosCercanos(codigoJoined, descripcionExcel, catalogoUnificado)
+      });
+      continue;
+    }
+
+    let notaFinal = notaDetectadaRaw;
+    if (colT1 !== -1 && colT2 !== -1 && producto.variantes.length === 2) {
+      const q1Res = parsearCantidadEstricta(row[colT1] ?? 0);
+      const q2Res = parsearCantidadEstricta(row[colT2] ?? 0);
+      if (q1Res.valid && q2Res.valid && q1Res.qty + q2Res.qty === qtyRes.qty) {
+        notaFinal = `${producto.variantes[0]!.codigo}: ${q1Res.qty} / ${producto.variantes[1]!.codigo}: ${q2Res.qty}`;
+      }
+    } else if (!notaFinal && producto.variantes.length >= 2) {
+      if (codigosCorregidos.length === 1) {
+        notaFinal = codigosCorregidos[0]!;
+      } else if (modeloDetectado) {
+        notaFinal = modeloDetectado;
+      }
+    }
+
+    if (
+      precioExcelReferencia !== null &&
+      precioExcelReferencia > 0 &&
+      Math.abs(precioExcelReferencia - producto.precioNeto) > 1 &&
+      !avisosPrecioMap.has(codigoJoined)
+    ) {
+      avisosPrecioMap.set(codigoJoined, {
+        codigo: codigoJoined,
+        nombreProducto: producto.nombre,
+        precioPlanilla: precioExcelReferencia,
+        precioVigente: producto.precioNeto
+      });
+    }
+
+    lineasAcumuladas = aplicarLineaAlBorrador(lineasAcumuladas, producto, qtyRes.qty, notaFinal);
+
+    for (const cf of correccionesFila) {
+      const idxCorr = correcciones.length;
+      correcciones.push({
+        id: `${hoja}#${rIdx + 1}#${cf.original}->${cf.corregido}`,
+        hoja,
+        fila: rIdx + 1,
+        original: cf.original,
+        corregidoA: cf.corregido,
+        productoNombre: producto.nombre,
+        motivo: cf.motivo,
+        lineaId: producto.idGrupo
+      });
+      correccionesPendientesLineaId.push({ corrIdx: idxCorr, idGrupo: producto.idGrupo });
+    }
+
+    // Si resolverLinea recuperó un typo de 1 dígito en nota con códigos, transparentarlo
+    if (notaFinal && producto.variantes.length >= 2) {
+      const codsProd = new Set(producto.variantes.map((v) => v.codigo.toUpperCase()));
+      const notaNormLocal = normalizarTexto(notaFinal);
+      const lineaResuelta = lineasAcumuladas.find((l) => l.idGrupo === producto.idGrupo);
+      if (lineaResuelta && lineaResuelta.estado === 'OK') {
+        for (const mTok of notaNormLocal.matchAll(/\b(6\d{3})\b/g)) {
+          const tok = mTok[1];
+          if (!tok || codsProd.has(tok)) continue;
+          const matchedVar = producto.variantes.find((v) => distanciaEdicion(tok, v.codigo.toLowerCase()) <= 1);
+          if (matchedVar) {
+            const idxCorr = correcciones.length;
+            correcciones.push({
+              id: `${hoja}#${rIdx + 1}#${tok}->${matchedVar.codigo}`,
+              hoja,
+              fila: rIdx + 1,
+              original: tok,
+              corregidoA: matchedVar.codigo,
+              productoNombre: producto.nombre,
+              motivo: 'Código de talle/color corregido por un dígito',
+              lineaId: lineaResuelta.idLinea
+            });
+            correccionesPendientesLineaId.push({ corrIdx: idxCorr, idGrupo: producto.idGrupo });
+          }
+        }
+      }
+    }
+  }
+
+  for (const pending of correccionesPendientesLineaId) {
+    const lineaFinal = lineasAcumuladas.find((l) => l.idGrupo === pending.idGrupo);
+    if (lineaFinal && correcciones[pending.corrIdx]) {
+      correcciones[pending.corrIdx]!.lineaId = lineaFinal.idLinea;
+    }
+  }
+
+  return {
+    lineas: lineasAcumuladas,
+    advertencias,
+    avisosPrecio: Array.from(avisosPrecioMap.values()),
+    correcciones,
+    unidadesDeclaradas,
+    subtotalDeclarado,
+    totalConIvaDeclarado,
+    subtotalCalculado: round2(subtotalCalculado),
+    filasOmitidasConDatos,
+    descuentoDetectado,
+    headerRowIdx
+  };
+};
+
+const inferirClienteDesdeNombreArchivo = (fileName: string): string => {
+  const soloNombre = fileName.replace(/^.*[\\/]/, '');
+  const base = soloNombre.replace(/\.[^/.]+$/, '');
+  const sinParens = base.replace(/\([^)]*\)/g, ' ');
+  const tokens = normalizarTexto(sinParens)
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+
+  const NOISE = new Set([
+    'nota',
+    'pedido',
+    'pedidos',
+    'mibi',
+    'orden',
+    'de',
+    'del',
+    'la',
+    'el',
+    'los',
+    'las',
+    'final',
+    'actualizado',
+    'actualizada',
+    'como',
+    'quedaria',
+    'copia',
+    'version',
+    'nuevo',
+    'nueva',
+    'verano',
+    'invierno',
+    'temporada',
+    'enero',
+    'febrero',
+    'marzo',
+    'abril',
+    'mayo',
+    'junio',
+    'julio',
+    'agosto',
+    'septiembre',
+    'octubre',
+    'noviembre',
+    'diciembre',
+    'ene',
+    'feb',
+    'mar',
+    'abr',
+    'may',
+    'jun',
+    'jul',
+    'ago',
+    'sep',
+    'sept',
+    'oct',
+    'nov',
+    'dic',
+    'lista',
+    'srl',
+    'sa'
+  ]);
+
+  const limpios = tokens.filter((t) => {
+    if (NOISE.has(t)) return false;
+    if (/^\d+$/.test(t)) return false;
+    if (/^\d{2,4}[-_]\d{2,4}$/.test(t)) return false;
+    return t.length >= 2;
+  });
+
+  const joined = limpios.join(' ');
+  const letrasCount = (joined.match(/[a-z]/g) ?? []).length;
+  if (letrasCount < 4) return '';
+
+  return limpios.map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+};
+
+const esValorPlaceholderCliente = (val: string): boolean => {
+  const n = normalizarTexto(val);
+  if (!n || n.length < 2) return true;
+  return /^(?:completar|nombre|cliente|cliente \/ negocio|razon social|mibi|fecha|-+|\.+)$/.test(n);
+};
+
+export const extraerDatosCabeceraExcel = (
+  rows: CellPrimitive[][],
+  headerRowIdx: number,
+  fileName: string,
+  descuentoPie: number | null
+): DatosClienteDetectados | null => {
+  const limit = headerRowIdx > 0 ? Math.min(15, headerRowIdx) : Math.min(15, rows.length);
+  let cliente = '';
+  let cuit = '';
+  let whatsapp = '';
+  let transporte = '';
+  let descuentoPorc: number | undefined =
+    descuentoPie !== null && descuentoPie > 0 && descuentoPie < 100 ? descuentoPie : undefined;
+  let fechaPedido = '';
+
+  const hoySentinel = '0000-00-00';
+
+  for (let rIdx = 0; rIdx < limit; rIdx++) {
+    const row = rows[rIdx];
+    if (!row) continue;
+    for (let c = 0; c < row.length; c++) {
+      const raw = row[c];
+      if (raw === null || raw === undefined) continue;
+      const rawStr = limpiarTextoInvisible(String(raw));
+      if (!rawStr) continue;
+      const norm = normalizarTexto(rawStr);
+
+      let label = norm;
+      let inlineVal = '';
+      const colonIdx = rawStr.indexOf(':');
+      if (colonIdx > 0) {
+        label = normalizarTexto(rawStr.slice(0, colonIdx));
+        inlineVal = limpiarTextoInvisible(rawStr.slice(colonIdx + 1));
+      }
+
+      const nextNonEmptyCell = (): CellPrimitive => {
+        for (let k = c + 1; k < row.length; k++) {
+          const v = row[k];
+          if (v !== null && v !== undefined && limpiarTextoInvisible(String(v)) !== '') {
+            return v;
+          }
+        }
+        return null;
+      };
+
+      const valCell = inlineVal ? inlineVal : nextNonEmptyCell();
+      const valStr = valCell !== null && valCell !== undefined ? limpiarTextoInvisible(String(valCell)) : '';
+
+      if (!cliente && /^(?:cliente|razon social|senor(?:es)?|nombre\s*\/\s*razon|apellido y nombre)$/.test(label)) {
+        if (valStr && !esValorPlaceholderCliente(valStr)) {
+          cliente = valStr;
+        }
+      } else if (!cuit && /^c\.?u\.?i\.?t\.?$/.test(label)) {
+        if (valStr && validarCuit(valStr)) {
+          cuit = normalizarCuit(valStr);
+        }
+      } else if (!whatsapp && /^(?:whatsapp|tel|telefono|cel|celular|tel\s*\/\s*whatsapp)$/.test(label)) {
+        const digits = valStr.replace(/\D/g, '');
+        if (digits.length >= 7) {
+          whatsapp = valStr;
+        }
+      } else if (!transporte && /^(?:transporte|expreso|envio por)$/.test(label)) {
+        if (valStr && !esValorPlaceholderCliente(valStr)) {
+          transporte = valStr;
+        }
+      } else if (descuentoPorc === undefined && /^(?:descuento|bonif(?:icacion)?)$/.test(label)) {
+        const num = extractNumericFromCell(valCell);
+        if (num !== null && num > 0 && num < 100) {
+          descuentoPorc = num;
+        }
+      } else if (!fechaPedido && /^(?:fecha|fecha pedido|fecha de emision)$/.test(label)) {
+        const parsed = parsearFechaExcel(valCell, hoySentinel);
+        if (parsed !== hoySentinel && /^\d{4}-\d{2}-\d{2}$/.test(parsed)) {
+          fechaPedido = parsed;
+        }
+      }
+    }
+  }
+
+  let origen: DatosClienteDetectados['origen'] = 'ARCHIVO';
+  if (!cliente) {
+    const inferido = inferirClienteDesdeNombreArchivo(fileName);
+    if (inferido) {
+      cliente = inferido;
+      origen = 'NOMBRE_ARCHIVO';
+    }
+  }
+
+  if (!cliente && !cuit && !whatsapp && !transporte && descuentoPorc === undefined && !fechaPedido) {
+    return null;
+  }
+
+  return {
+    ...(cliente ? { cliente } : {}),
+    ...(cuit ? { cuit } : {}),
+    ...(whatsapp ? { whatsapp } : {}),
+    ...(transporte ? { transporte } : {}),
+    ...(descuentoPorc !== undefined ? { descuentoPorc } : {}),
+    ...(fechaPedido ? { fechaPedido } : {}),
+    origen
+  };
+};
+
+export const construirAuditoriaDesdeTabular = (
+  tab: ResultadoAnalisisTabular,
+  hojasDisponibles: ReadonlyArray<HojaDisponible>
+): AuditoriaLectura => {
+  const unidadesLeidas = tab.lineas.reduce((acc, l) => acc + l.cantidadTotal, 0);
+  const unidadesEnAlertas = tab.advertencias.reduce((acc, a) => acc + (a.cantidadDetectada ?? 0), 0);
+  const diferenciaUnidades =
+    tab.unidadesDeclaradas !== null ? unidadesLeidas - tab.unidadesDeclaradas : null;
+  const diferenciaImporte =
+    tab.subtotalDeclarado !== null ? round2(tab.subtotalCalculado - tab.subtotalDeclarado) : null;
+
+  const motivos: string[] = [];
+  let estadoIntegridad: AuditoriaLectura['estadoIntegridad'] = 'EXACTO';
+
+  if (diferenciaUnidades !== null && diferenciaUnidades !== 0) {
+    estadoIntegridad = 'BLOQUEADO';
+    motivos.push(
+      `El archivo indica ${tab.unidadesDeclaradas} unidades totales, pero se leyeron ${unidadesLeidas} (diferencia de ${diferenciaUnidades > 0 ? `+${diferenciaUnidades}` : diferenciaUnidades} u.).`
+    );
+  }
+  if (diferenciaImporte !== null && Math.abs(diferenciaImporte) > 1) {
+    estadoIntegridad = 'BLOQUEADO';
+    motivos.push(
+      `El subtotal del archivo ($${tab.subtotalDeclarado?.toFixed(2)}) difiere de la suma de filas ($${tab.subtotalCalculado.toFixed(2)}).`
+    );
+  }
+
+  if (estadoIntegridad !== 'BLOQUEADO') {
+    if (tab.advertencias.length > 0 || tab.correcciones.length > 0 || hojasDisponibles.length > 1) {
+      estadoIntegridad = 'REVISAR';
+    }
+    if (tab.advertencias.length > 0) {
+      motivos.push(`Hay ${tab.advertencias.length} fila(s) en el centro de alertas para resolver.`);
+    }
+    if (tab.correcciones.length > 0) {
+      motivos.push(`Se aplicaron ${tab.correcciones.length} corrección(es) automática(s) revisables.`);
+    }
+    if (hojasDisponibles.length > 1) {
+      motivos.push(`El libro contiene ${hojasDisponibles.length} hojas con artículos; se lee solo la seleccionada.`);
+    }
+  }
+
+  return {
+    unidadesLeidas,
+    unidadesDeclaradasArchivo: tab.unidadesDeclaradas,
+    diferenciaUnidades,
+    unidadesEnAlertas,
+    subtotalNetoCalculado: tab.subtotalCalculado,
+    totalDeclaradoArchivo: tab.subtotalDeclarado,
+    diferenciaImporte,
+    filasOmitidasConDatos: tab.filasOmitidasConDatos,
+    estadoIntegridad,
+    motivos
+  };
+};
+
+const detectarPlanillaGeneralEnRows = (rows: CellPrimitive[][]): boolean => {
+  for (const row of rows) {
+    const norms = row.map((c) => (c === null ? '' : normalizarTexto(String(c)).replace(/\s+/g, ' ').trim()));
+    const tienePagoOArmado = norms.some(
+      (t) =>
+        t.includes('estado pago') ||
+        t.includes('estado de pago') ||
+        t.includes('estado armado') ||
+        t.includes('estado de armado') ||
+        t === 'armado'
+    );
+    if (!tienePagoOArmado) continue;
+
+    let otros = 0;
+    if (
+      norms.some(
+        (t) =>
+          t.includes('n° pedido') ||
+          t.includes('nro pedido') ||
+          t.includes('numero pedido') ||
+          t.includes('n.º pedido') ||
+          t.includes('n.o pedido')
+      )
+    ) {
+      otros++;
+    }
+    if (norms.some((t) => t === 'cliente' || t.startsWith('cliente ') || t.includes('cliente /'))) {
+      otros++;
+    }
+    if (norms.some((t) => t.includes('cheque') || t.includes('saldo pendiente') || t.includes('monto abonado'))) {
+      otros++;
+    }
+    if (norms.some((t) => t.includes('total facturado') || t.includes('total pedido'))) {
+      otros++;
+    }
+    if (norms.some((t) => t === 'envio' || t.includes('estado envio') || t.includes('estado de envio'))) {
+      otros++;
+    }
+
+    if (otros >= 2) return true;
+  }
+  return false;
+};
+
 export const parsearExcelLista006 = (
   buffer: ArrayBuffer,
   fileName: string,
-  catalogoExtra: ReadonlyArray<ProductoCatalogo> = CATALOGO_EXTENDIDO_MIBI
+  catalogoExtra: ReadonlyArray<ProductoCatalogo> = CATALOGO_EXTENDIDO_MIBI,
+  opciones?: { hojaSeleccionada?: string }
 ): ResultadoParseoLista006 => {
   const catalogoPorCodigo = new Map<string, ProductoCatalogo>(CATALOGO_EXTENDIDO_BY_CODIGO);
   const catalogoUnificadoMap = new Map<string, ProductoCatalogo>();
@@ -931,20 +1936,45 @@ export const parsearExcelLista006 = (
       errorFatal: 'No se pudo leer el archivo. Verificá que sea un Excel (.xlsx, .xls) o CSV válido.',
       lineas: [],
       advertencias: [],
-      avisosPrecio: []
+      avisosPrecio: [],
+      tipoArchivo: 'NO_COMPATIBLE',
+      auditoria: auditoriaVacia('BLOQUEADO'),
+      correccionesAutomaticas: [],
+      hojasDisponibles: [],
+      datosDetectados: null
     };
   }
 
   let esLista006 = false;
   let tieneTablaEstructuradaMibi = false;
+  const rowsPorHoja = new Map<string, CellPrimitive[][]>();
+
   for (const sheetName of wb.SheetNames) {
     const ws = wb.Sheets[sheetName];
     if (!ws) continue;
     const rows = expandirCeldasCombinadas(ws);
+    rowsPorHoja.set(sheetName, rows);
+
+    if (detectarPlanillaGeneralEnRows(rows)) {
+      return {
+        ok: false,
+        errorFatal:
+          "Este archivo es una Planilla General de pedidos históricos. Para importarla, usá 'Planillas y Catálogo → Importar planilla previa'.",
+        lineas: [],
+        advertencias: [],
+        avisosPrecio: [],
+        tipoArchivo: 'PLANILLA_GENERAL_ADMIN',
+        auditoria: auditoriaVacia('BLOQUEADO'),
+        correccionesAutomaticas: [],
+        hojasDisponibles: [],
+        datosDetectados: null
+      };
+    }
+
     let sheetHasCodigoHeader = false;
     let sheetHasQtyOrPriceHeader = false;
     for (const row of rows) {
-      const rowTexts = row.map((c) => (c === null ? '' : normalizarTexto(String(c))));
+      const rowTexts = row.map((c) => (c === null ? '' : normalizarTexto(String(c)).replace(/\s+/g, ' ').trim()));
       for (const cellText of rowTexts) {
         if (!cellText) continue;
         const txt = cellText.replace(/["°º]/g, ' ');
@@ -953,7 +1983,6 @@ export const parsearExcelLista006 = (
           break;
         }
       }
-      if (esLista006) break;
 
       if (rowTexts.some((t) => t === 'codigos' || t === 'codigo' || t === 'codigo t1')) {
         sheetHasCodigoHeader = true;
@@ -977,7 +2006,6 @@ export const parsearExcelLista006 = (
         tieneTablaEstructuradaMibi = true;
       }
     }
-    if (esLista006) break;
   }
 
   if (!esLista006 && !tieneTablaEstructuradaMibi) {
@@ -987,332 +2015,97 @@ export const parsearExcelLista006 = (
         'El archivo subido no corresponde a una plantilla compatible con Mibi® (LISTA N° 006 o tabla con columnas Código y Cantidad).',
       lineas: [],
       advertencias: [],
-      avisosPrecio: []
+      avisosPrecio: [],
+      tipoArchivo: 'NO_COMPATIBLE',
+      auditoria: auditoriaVacia('BLOQUEADO'),
+      correccionesAutomaticas: [],
+      hojasDisponibles: [],
+      datosDetectados: null
     };
   }
 
-  const advertencias: AdvertenciaExcel[] = [];
-  const avisosPrecioMap = new Map<string, AvisoPrecioExcel>();
-  let lineasAcumuladas: LineaPedido[] = [];
+  const resultadosHojas: Array<{ nombre: string; esSecundaria: boolean; rows: CellPrimitive[][]; tab: ResultadoAnalisisTabular }> = [];
 
   for (const sheetName of wb.SheetNames) {
+    const rows = rowsPorHoja.get(sheetName);
+    if (!rows) continue;
     const sheetNorm = normalizarTexto(sheetName);
-    if ((sheetNorm === 'a revisar' || sheetNorm === 'resumen') && lineasAcumuladas.length > 0) {
-      continue;
-    }
+    const esSecundaria =
+      sheetNorm === 'a revisar' ||
+      sheetNorm === 'resumen' ||
+      sheetNorm === 'revision' ||
+      sheetNorm === 'control';
+    const tab = analizarFilasTabulares(rows, sheetName, {
+      catalogoPorCodigo,
+      catalogoUnificado,
+      fileName
+    });
+    resultadosHojas.push({ nombre: sheetName, esSecundaria, rows, tab });
+  }
 
-    const ws = wb.Sheets[sheetName];
-    if (!ws) continue;
-    const rows = expandirCeldasCombinadas(ws);
+  const hayHojaPrincipalConDatos = resultadosHojas.some(
+    (h) => !h.esSecundaria && (h.tab.lineas.length > 0 || h.tab.advertencias.length > 0)
+  );
+  const hojasCandidatas = resultadosHojas.filter(
+    (h) =>
+      (!h.esSecundaria || !hayHojaPrincipalConDatos) &&
+      (h.tab.lineas.length > 0 || h.tab.advertencias.length > 0)
+  );
 
-    let colCodeA = 0;
-    let colCodeEnd = 1; // rango inclusivo [colCodeA..colCodeEnd] para soportar 1 o más columnas de códigos antes de la descripción
-    let colDesc = 2;
-    let colPrecio = 3;
-    let colQty = 4;
-    let colTotalPed = -1;
-    let colT1 = -1;
-    let colT2 = -1;
-    let colNota = -1;
-    let colModelo = -1;
-    let headerDetectado = false;
-    let hadNotaHeader = false;
+  const hojaElegida =
+    (opciones?.hojaSeleccionada
+      ? hojasCandidatas.find((h) => h.nombre === opciones.hojaSeleccionada)
+      : undefined) ??
+    hojasCandidatas[0] ??
+    resultadosHojas[0];
 
-    for (let rIdx = 0; rIdx < rows.length; rIdx++) {
-      const row = rows[rIdx];
-      if (!row) continue;
-      const rowTexts = row.map((c) => (c === null ? '' : normalizarTexto(String(c))));
+  const hojasDisponibles: HojaDisponible[] =
+    hojasCandidatas.length >= 2
+      ? hojasCandidatas.map((h) => ({
+          nombre: h.nombre,
+          lineas: h.tab.lineas.length,
+          unidades: h.tab.lineas.reduce((acc, l) => acc + l.cantidadTotal, 0),
+          seleccionada: hojaElegida ? h.nombre === hojaElegida.nombre : false
+        }))
+      : [];
 
-      const idxCantPed = rowTexts.findIndex(
-        (t) => t.includes('cantidades pedidas') || t.includes('cantidad pedida')
-      );
-      const idxT1 = rowTexts.findIndex((t) => t.includes('pedidas t1') || t === 't1' || t === 'talle 1');
-      const idxT2 = rowTexts.findIndex((t) => t.includes('pedidas t2') || t === 't2' || t === 'talle 2');
-      const idxTotalPed = rowTexts.findIndex((t) => t.includes('total pedido'));
-      const idxCantFallback = rowTexts.findIndex((t) => t === 'cantidad' || t === 'cant');
-      const idxTalleColor = rowTexts.findIndex(
-        (t) => t.includes('talles/colores') || t.includes('talles / colores') || t.includes('talles/ colores')
-      );
-      const idxModelo = rowTexts.findIndex((t) => t.includes('modelo') || t === 'talle');
-      const idxDetalleFallback = rowTexts.findIndex((t) => t.includes('detalle') && !t.includes('producto'));
-      const idxCodigos = rowTexts.findIndex((t) => t === 'codigos' || t === 'codigo' || t === 'codigo t1');
-      const idxCodigoT2 = rowTexts.findIndex((t) => t === 'codigo t2');
-      const idxPrecio = rowTexts.findIndex((t) => t === 'precio' || t.includes('precio neto'));
-      const idxDesc = rowTexts.findIndex(
-        (t) =>
-          t === 'producto' ||
-          t === 'productos' ||
-          t === 'descripcion' ||
-          t === 'caracteristicas' ||
-          t === 'articulo' ||
-          t === 'articulos' ||
-          t.includes('detalle producto') ||
-          t.includes('detalle del producto')
-      );
-
-      if (
-        idxCantPed !== -1 ||
-        (idxT1 !== -1 && idxT2 !== -1) ||
-        (idxCodigos !== -1 && (idxCantFallback !== -1 || idxPrecio !== -1 || idxDesc !== -1))
-      ) {
-        headerDetectado = true;
-        if (idxCodigos !== -1) {
-          colCodeA = idxCodigos;
-          if (idxCodigoT2 !== -1) {
-            colCodeEnd = idxCodigoT2;
-          } else if (idxDesc > idxCodigos + 1) {
-            colCodeEnd = idxDesc - 1;
-          } else if (idxDesc === idxCodigos + 1) {
-            colCodeEnd = idxCodigos;
-          } else {
-            colCodeEnd = idxCodigos + 1;
-          }
-        }
-        if (idxDesc !== -1) {
-          colDesc = idxDesc;
-          if (colCodeEnd >= idxDesc && idxDesc > colCodeA) {
-            colCodeEnd = idxDesc - 1;
-          }
-        }
-        if (idxPrecio !== -1) colPrecio = idxPrecio;
-        if (idxT1 !== -1 && idxT2 !== -1) {
-          colT1 = idxT1;
-          colT2 = idxT2;
-          colTotalPed = idxTotalPed;
-          if (idxTotalPed !== -1) colQty = idxTotalPed;
-        } else if (idxCantPed !== -1 || idxCantFallback !== -1 || idxTotalPed !== -1) {
-          colT1 = -1;
-          colT2 = -1;
-          colTotalPed = idxTotalPed;
-          if (idxTotalPed !== -1) colQty = idxTotalPed;
-          else if (idxCantPed !== -1) colQty = idxCantPed;
-          else if (idxCantFallback !== -1) colQty = idxCantFallback;
-        }
-
-        if (idxTalleColor !== -1) {
-          colNota = idxTalleColor;
-          hadNotaHeader = true;
-        } else if (idxDetalleFallback !== -1) {
-          colNota = idxDetalleFallback;
-          hadNotaHeader = true;
-        } else if (!hadNotaHeader) {
-          colNota = -1;
-        }
-
-        if (idxModelo !== -1 && idxModelo !== colNota) colModelo = idxModelo;
-        continue;
-      }
-
-      const extractCode = (txt: string): string | null => {
-        if (!txt || PALABRAS_NO_CODIGO.has(txt)) return null;
-        if (
-          /\b(?:ENERO|FEBRERO|MARZO|ABRIL|MAYO|JUNIO|JULIO|AGOSTO|SEPTIEMBRE|OCTUBRE|NOVIEMBRE|DICIEMBRE)\b/.test(txt) ||
-          /\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}/.test(txt) ||
-          /^LISTA\b/.test(txt)
-        ) {
-          return null;
-        }
-        if (catalogoPorCodigo.has(txt)) return txt;
-        const mNum = txt.match(/\b(\d{4})\b/);
-        if (mNum && mNum[1]) return mNum[1];
-        const mExt = txt.match(/\b([A-Z0-9]{2,12}-[A-Z0-9]{1,12})\b/);
-        if (mExt && mExt[1]) return mExt[1];
-        for (const token of txt.split(/[\s\/,|]+/)) {
-          if (token && catalogoPorCodigo.has(token)) return token;
-        }
-        if (!txt.includes(' ') && /^[A-Z0-9]{3,16}$/.test(txt) && /(?:\d.*){2,}/.test(txt)) {
-          return txt;
-        }
-        return null;
+  const tabFinal: ResultadoAnalisisTabular = hojaElegida
+    ? hojaElegida.tab
+    : {
+        lineas: [],
+        advertencias: [],
+        avisosPrecio: [],
+        correcciones: [],
+        unidadesDeclaradas: null,
+        subtotalDeclarado: null,
+        totalConIvaDeclarado: null,
+        subtotalCalculado: 0,
+        filasOmitidasConDatos: 0,
+        descuentoDetectado: null,
+        headerRowIdx: -1
       };
 
-      const codigosEnFila: string[] = [];
-      let esFilaTotal = false;
-      for (let cIdx = Math.max(0, colCodeA); cIdx <= Math.min(row.length - 1, colCodeEnd); cIdx++) {
-        const rawCell = row[cIdx];
-        if (rawCell === null || rawCell === undefined) continue;
-        const cleanCell = limpiarTextoInvisible(String(rawCell)).toUpperCase();
-        if (!cleanCell) continue;
-        if (cIdx === colCodeA && /^(?:TOTAL|SUBTOTAL)\b/.test(cleanCell)) {
-          esFilaTotal = true;
-          break;
-        }
-        if (
-          /\b(?:ENERO|FEBRERO|MARZO|ABRIL|MAYO|JUNIO|JULIO|AGOSTO|SEPTIEMBRE|OCTUBRE|NOVIEMBRE|DICIEMBRE)\b/.test(cleanCell) ||
-          /\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}/.test(cleanCell) ||
-          /^LISTA\b/.test(cleanCell)
-        ) {
-          continue;
-        }
-        for (const c4 of cleanCell.matchAll(/\b(\d{4})\b/g)) {
-          if (c4[1] && !codigosEnFila.includes(c4[1])) codigosEnFila.push(c4[1]);
-        }
-        const extracted = extractCode(cleanCell);
-        if (extracted && !codigosEnFila.includes(extracted)) {
-          codigosEnFila.push(extracted);
-        }
-      }
-      if (esFilaTotal || codigosEnFila.length === 0) continue;
+  const tipoArchivo = /\.csv$/i.test(fileName)
+    ? 'CSV'
+    : esLista006
+      ? 'LISTA_006'
+      : 'PLANILLA_PERSONALIZADA';
 
-      const descCell = headerDetectado ? (row[colDesc] ?? null) : (row[2] ?? null);
-      const precioCell = headerDetectado ? (colPrecio >= 0 ? (row[colPrecio] ?? null) : null) : (row[3] ?? null);
-      const notaCell = headerDetectado ? (colNota >= 0 ? (row[colNota] ?? null) : null) : (row[6] ?? null);
-      const modeloCell = headerDetectado && colModelo >= 0 ? (row[colModelo] ?? null) : null;
-
-      // Cantidad: en plantillas con T1/T2 sin columna Total Pedido, sumar T1 + T2
-      const usaT1T2SinTotal = colT1 !== -1 && colT2 !== -1 && colTotalPed === -1;
-      const rawT1 = colT1 !== -1 ? (row[colT1] ?? null) : null;
-      const rawT2 = colT2 !== -1 ? (row[colT2] ?? null) : null;
-      const qtyCell = usaT1T2SinTotal
-        ? (() => {
-            const p1 = parsearCantidadEstricta(rawT1);
-            const p2 = parsearCantidadEstricta(rawT2);
-            if (p1.valid && p2.valid) return p1.qty + p2.qty;
-            return rawT1 ?? rawT2;
-          })()
-        : headerDetectado
-          ? (row[colQty] ?? null)
-          : (row[4] ?? null);
-
-      const descripcionExcel =
-        descCell !== null && descCell !== undefined ? limpiarTextoInvisible(String(descCell)) : '';
-      if (/^(?:total|subtotal)\b/i.test(descripcionExcel)) continue;
-
-      const notaDetectadaRaw =
-        notaCell !== null && notaCell !== undefined ? limpiarTextoInvisible(String(notaCell)) : '';
-      const modeloDetectado =
-        modeloCell !== null && modeloCell !== undefined ? limpiarTextoInvisible(String(modeloCell)) : '';
-      const cantidadRaw =
-        qtyCell !== null && qtyCell !== undefined ? limpiarTextoInvisible(String(qtyCell)) : '';
-
-      // Typo conocido en planilla Mazzaro: 6570 Chaleco Bug -> 6540
-      const descNormLower = normalizarTexto(descripcionExcel);
-      const codigosCorregidos = codigosEnFila.map((c) =>
-        c === '6570' && descNormLower.includes('chaleco') && (descNormLower.includes('bug') || normalizarTexto(modeloDetectado).includes('bug'))
-          ? '6540'
-          : c
-      );
-
-      let precioExcelReferencia: number | null = null;
-      if (precioCell !== null && precioCell !== undefined && limpiarTextoInvisible(String(precioCell)) !== '') {
-        const parsedPrecio =
-          typeof precioCell === 'number'
-            ? Number.isFinite(precioCell)
-              ? round2(precioCell)
-              : 0
-            : parsearMontoArgentino(precioCell);
-        if (parsedPrecio > 0) {
-          precioExcelReferencia = parsedPrecio;
-        }
-      }
-
-      // Regla oficial: ignorar fila duplicada 6545 sin precio ni cantidad
-      if (
-        codigosCorregidos.includes('6545') &&
-        (precioCell === null || String(precioCell).trim() === '') &&
-        (qtyCell === null || String(qtyCell).trim() === '' || Number(qtyCell) === 0)
-      ) {
-        continue;
-      }
-
-      let producto: ProductoCatalogo | undefined;
-      for (const cod of codigosCorregidos) {
-        const encontrado =
-          catalogoPorCodigo.get(cod.toUpperCase()) ??
-          CATALOGO_EXTENDIDO_BY_CODIGO.get(cod) ??
-          CATALOGO_BY_CODIGO.get(cod);
-        if (encontrado) {
-          producto = encontrado;
-          break;
-        }
-      }
-
-      const codigoJoined = codigosCorregidos.join('/');
-      const qtyRes = parsearCantidadEstricta(qtyCell);
-      if (!qtyRes.valid) {
-        advertencias.push({
-          hoja: sheetName,
-          fila: rIdx + 1,
-          codigo: codigoJoined,
-          mensaje: qtyRes.motivo ?? 'Cantidad inválida',
-          id: `${sheetName}#${rIdx + 1}#${codigoJoined}#CANTIDAD_INVALIDA`,
-          tipo: 'CANTIDAD_INVALIDA',
-          codigosDetectados: codigosCorregidos,
-          descripcionExcel,
-          precioExcelReferencia,
-          cantidadDetectada: null,
-          cantidadRaw,
-          notaDetectada: notaDetectadaRaw || modeloDetectado,
-          productoExistenteIdGrupo: producto ? producto.idGrupo : null,
-          sugerenciasCatalogo: producto
-            ? []
-            : sugerirProductosCercanos(codigoJoined, descripcionExcel, catalogoUnificado)
-        });
-        continue;
-      }
-
-      if (qtyRes.qty === 0) continue;
-
-      if (!producto) {
-        advertencias.push({
-          hoja: sheetName,
-          fila: rIdx + 1,
-          codigo: codigoJoined,
-          mensaje: `Código desconocido (${codigoJoined}) con cantidad ${qtyRes.qty}`,
-          id: `${sheetName}#${rIdx + 1}#${codigoJoined}#CODIGO_DESCONOCIDO`,
-          tipo: 'CODIGO_DESCONOCIDO',
-          codigosDetectados: codigosCorregidos,
-          descripcionExcel,
-          precioExcelReferencia,
-          cantidadDetectada: qtyRes.qty,
-          cantidadRaw,
-          notaDetectada: notaDetectadaRaw || modeloDetectado,
-          productoExistenteIdGrupo: null,
-          sugerenciasCatalogo: sugerirProductosCercanos(codigoJoined, descripcionExcel, catalogoUnificado)
-        });
-        continue;
-      }
-
-      // Construir nota final con prioridad: columnas T1/T2 separadas -> nota explícita -> código único / modelo
-      let notaFinal = notaDetectadaRaw;
-      if (colT1 !== -1 && colT2 !== -1 && producto.variantes.length === 2) {
-        const q1Res = parsearCantidadEstricta(row[colT1] ?? 0);
-        const q2Res = parsearCantidadEstricta(row[colT2] ?? 0);
-        if (q1Res.valid && q2Res.valid && q1Res.qty + q2Res.qty === qtyRes.qty) {
-          notaFinal = `${producto.variantes[0]!.codigo}: ${q1Res.qty} / ${producto.variantes[1]!.codigo}: ${q2Res.qty}`;
-        }
-      } else if (!notaFinal && producto.variantes.length >= 2) {
-        if (codigosCorregidos.length === 1) {
-          notaFinal = codigosCorregidos[0]!;
-        } else if (modeloDetectado) {
-          notaFinal = modeloDetectado;
-        }
-      }
-
-      // Auditoría de precio informativa sin confiar nunca en el precio de la planilla
-      if (
-        precioExcelReferencia !== null &&
-        precioExcelReferencia > 0 &&
-        Math.abs(precioExcelReferencia - producto.precioNeto) > 1 &&
-        !avisosPrecioMap.has(codigoJoined)
-      ) {
-        avisosPrecioMap.set(codigoJoined, {
-          codigo: codigoJoined,
-          nombreProducto: producto.nombre,
-          precioPlanilla: precioExcelReferencia,
-          precioVigente: producto.precioNeto
-        });
-      }
-
-      lineasAcumuladas = aplicarLineaAlBorrador(lineasAcumuladas, producto, qtyRes.qty, notaFinal);
-    }
-  }
+  const auditoria = construirAuditoriaDesdeTabular(tabFinal, hojasDisponibles);
+  const datosDetectados = hojaElegida
+    ? extraerDatosCabeceraExcel(hojaElegida.rows, tabFinal.headerRowIdx, fileName, tabFinal.descuentoDetectado)
+    : extraerDatosCabeceraExcel([], -1, fileName, null);
 
   return {
     ok: true,
-    lineas: lineasAcumuladas,
-    advertencias,
-    avisosPrecio: Array.from(avisosPrecioMap.values())
+    lineas: tabFinal.lineas,
+    advertencias: tabFinal.advertencias,
+    avisosPrecio: tabFinal.avisosPrecio,
+    tipoArchivo,
+    auditoria,
+    correccionesAutomaticas: tabFinal.correcciones,
+    hojasDisponibles,
+    datosDetectados
   };
 };
 

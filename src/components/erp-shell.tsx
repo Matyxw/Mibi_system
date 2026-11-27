@@ -53,6 +53,7 @@ import {
   type AdvertenciaExcel,
   type BatchPanelActivo,
   type ClienteConocido,
+  type ControlImportacionBorrador,
   type DrawerFocusTarget,
   type FiltroPedidos,
   type LineaPedido,
@@ -174,6 +175,7 @@ export function ErpShell({
   const [cantidadesManuales, setCantidadesManuales] = useState<Record<string, number>>({});
   const [advertenciasExcel, setAdvertenciasExcel] = useState<AdvertenciaExcel[]>([]);
   const [nombreArchivoCargado, setNombreArchivoCargado] = useState<string>('');
+  const [controlImportacion, setControlImportacion] = useState<ControlImportacionBorrador | null>(null);
 
   const toastTimerRef = useRef<number | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
@@ -1082,6 +1084,7 @@ export function ErpShell({
     setAdvertenciasExcel([]);
     setCantidadesManuales({});
     setNombreArchivoCargado('');
+    setControlImportacion(null);
     setDrawerPedidoId(null);
     setVista('nuevo');
     notify(`Datos de ${pedido.cliente} copiados para un nuevo pedido.`, 'green');
@@ -1118,6 +1121,7 @@ export function ErpShell({
       setAdvertenciasExcel([]);
       setCantidadesManuales({});
       setNombreArchivoCargado('');
+      setControlImportacion(null);
       setVista('pedidos');
       notify(`Pedido #${nuevo.numeroPedido} guardado (${formatARS(nuevo.totalFacturado)}).`, 'green');
     } finally {
@@ -1236,6 +1240,7 @@ export function ErpShell({
     setAdvertenciasExcel([]);
     setCantidadesManuales({});
     setNombreArchivoCargado('');
+    setControlImportacion(null);
     setForm(crearFormInicial());
     setVista('pedidos');
     notify('Sistema reiniciado en cero.', 'neutral');
@@ -1794,6 +1799,7 @@ export function ErpShell({
             proximoNumeroPedido={proximoNumeroPedido}
             catalogoCompleto={catalogoCompleto}
             clientesConocidos={clientesConocidos}
+            pedidosRecientes={pedidos}
             form={form}
             setForm={setForm}
             lineasBorrador={lineasBorrador}
@@ -1804,6 +1810,8 @@ export function ErpShell({
             setAdvertenciasExcel={setAdvertenciasExcel}
             nombreArchivoCargado={nombreArchivoCargado}
             setNombreArchivoCargado={setNombreArchivoCargado}
+            controlImportacion={controlImportacion}
+            setControlImportacion={setControlImportacion}
             copiadoId={copiadoId}
             guardandoPedido={guardandoPedido}
             onVolver={() => setVista('pedidos')}

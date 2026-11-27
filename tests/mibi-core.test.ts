@@ -1,12 +1,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import type { NextRequest } from 'next/server';
+import { NextRequest } from 'next/server';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import * as XLSX from 'xlsx';
 import JSZip from 'jszip';
 import {
   CATALOGO_BY_CODIGO,
   CATALOGO_EXTENDIDO_BY_CODIGO,
+  CATALOGO_EXTENDIDO_MIBI,
   CATALOGO_MIBI
 } from '@/lib/catalogo-mibi';
 import {
@@ -89,7 +90,13 @@ import {
   toggleArchivoProductoCatalogoDal
 } from '@/lib/dal/catalogo';
 import { POST as exportTableroPost } from '@/app/api/export/tablero/route';
+import { POST as analizarImportPost } from '@/app/api/import/analizar/route';
 import { AuthError } from '@/lib/dal/auth';
+import { detectarPedidoDuplicado } from '@/lib/import/anti-duplicado';
+import { analizarDocx } from '@/lib/import/docx-parser';
+import { detectarFormatoPorFirma } from '@/lib/import/firma-archivo';
+import { parsearNumeroDocumento } from '@/lib/import/numeros';
+import { parsearFacturaAfipDesdePaginas, type PaginaPdf } from '@/lib/import/pdf-parser';
 
 const makePedidoBase = (overrides: Partial<PedidoBase> = {}): PedidoBase => ({
   id: 'ped_test_1',
@@ -2007,5 +2014,362 @@ describe('MIBI Core — Catálogo, Centavos, Excel, Seguridad y RBAC', () => {
     expect(resSingle.advertencias).toHaveLength(0);
     expect(resSingle.lineas).toHaveLength(2);
     expect(resSingle.lineas.every((l) => l.estado === 'OK')).toBe(true);
+  });
+
+  // 59-67: Escudo matemático, Control de totales, AFIP PDF, DOCX Alta, Magic bytes, RBAC y anti-duplicado
+  it('59. Fila con cantidad > 0 y sin código genera alerta FILA_SIN_CODIGO sin pérdida silenciosa', () => {
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet([
+      ['MIBI LISTA N° 006'],
+      ['Codigos', '', 'Producto', 'Precio', 'Cantidades Pedidas', '', 'Talles/Colores'],
+      ['6510', '', 'Antiparras Dino', 9505, 3, '', ''],
+      ['', '', 'Antiparras Pop', 9505, 4, '', '']
+    ]);
+    XLSX.utils.book_append_sheet(wb, ws, 'Hoja1');
+    const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer;
+    const res = parsearExcelLista006(buf, 'sin_codigo.xlsx');
+    expect(res.ok).toBe(true);
+    expect(res.lineas).toHaveLength(1);
+    expect(res.auditoria.unidadesLeidas).toBe(3);
+    expect(res.auditoria.filasOmitidasConDatos).toBe(1);
+    expect(res.advertencias).toHaveLength(1);
+    expect(res.advertencias[0]?.tipo).toBe('FILA_SIN_CODIGO');
+    expect(res.advertencias[0]?.cantidadDetectada).toBe(4);
+    expect(res.advertencias[0]?.sugerenciasCatalogo.some((s) => s.idGrupo === '6511')).toBe(true);
+  });
+
+  it('60. Filas TOTAL DE UNIDADES e IMPUESTOS no se cuentan como artículos y alimentan unidadesDeclaradasArchivo', () => {
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet([
+      ['MIBI LISTA N° 006'],
+      ['Codigos', '', 'Producto', 'Precio', 'Cantidades Pedidas', 'Subtotal', 'Talles/Colores'],
+      ['6510', '', 'Antiparras Dino', 9505, 5, 47525, ''],
+      ['6511', '', 'Antiparras Pop', 9505, 3, 28515, ''],
+      ['TOTAL DE UNIDADES', '', '', '', 8, '', ''],
+      ['SUBTOTAL', '', '', '', '', 76040, ''],
+      ['IMPUESTOS', '', '', '', 21, 15968.4, '']
+    ]);
+    XLSX.utils.book_append_sheet(wb, ws, 'Hoja1');
+    const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer;
+    const res = parsearExcelLista006(buf, 'totales.xlsx');
+    expect(res.ok).toBe(true);
+    expect(res.lineas).toHaveLength(2);
+    expect(res.advertencias).toHaveLength(0);
+    expect(res.auditoria.unidadesLeidas).toBe(8);
+    expect(res.auditoria.unidadesDeclaradasArchivo).toBe(8);
+    expect(res.auditoria.totalDeclaradoArchivo).toBe(76040);
+    expect(res.auditoria.estadoIntegridad).toBe('EXACTO');
+  });
+
+  it('61. Descuadre de unidades devuelve estadoIntegridad BLOQUEADO y coincidencia devuelve EXACTO', () => {
+    const wbBad = XLSX.utils.book_new();
+    const wsBad = XLSX.utils.aoa_to_sheet([
+      ['Código', 'Producto', 'Cantidad'],
+      ['6510', 'Antiparras Dino', 5],
+      ['6511', 'Antiparras Pop', 3],
+      ['TOTAL DE UNIDADES', '', 10]
+    ]);
+    XLSX.utils.book_append_sheet(wbBad, wsBad, 'Pedido');
+    const resBad = parsearExcelLista006(
+      XLSX.write(wbBad, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer,
+      'descuadre.xlsx'
+    );
+    expect(resBad.ok).toBe(true);
+    expect(resBad.auditoria.unidadesLeidas).toBe(8);
+    expect(resBad.auditoria.unidadesDeclaradasArchivo).toBe(10);
+    expect(resBad.auditoria.diferenciaUnidades).toBe(-2);
+    expect(resBad.auditoria.estadoIntegridad).toBe('BLOQUEADO');
+
+    const wbOk = XLSX.utils.book_new();
+    const wsOk = XLSX.utils.aoa_to_sheet([
+      ['Código', 'Producto', 'Cantidad'],
+      ['6510', 'Antiparras Dino', 5],
+      ['6511', 'Antiparras Pop', 3],
+      ['TOTAL DE UNIDADES', '', 8]
+    ]);
+    XLSX.utils.book_append_sheet(wbOk, wsOk, 'Pedido');
+    const resOk = parsearExcelLista006(
+      XLSX.write(wbOk, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer,
+      'exacto.xlsx'
+    );
+    expect(resOk.auditoria.estadoIntegridad).toBe('EXACTO');
+    expect(resOk.auditoria.diferenciaUnidades).toBe(0);
+  });
+
+  it('62. Corrección heurística 6570 Chaleco Bug -> 6540 se registra, pero 6570 Pañal Shark queda intacto', () => {
+    const wbBug = XLSX.utils.book_new();
+    const wsBug = XLSX.utils.aoa_to_sheet([
+      ['Código', 'Producto', 'Cantidad'],
+      ['6570', 'Chaleco Bug', 4]
+    ]);
+    XLSX.utils.book_append_sheet(wbBug, wsBug, 'Hoja1');
+    const resBug = parsearExcelLista006(
+      XLSX.write(wbBug, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer,
+      'bug.xlsx'
+    );
+    expect(resBug.ok).toBe(true);
+    expect(resBug.lineas[0]?.idGrupo).toBe('6540-6568');
+    expect(resBug.correccionesAutomaticas).toHaveLength(1);
+    expect(resBug.correccionesAutomaticas[0]?.original).toBe('6570');
+    expect(resBug.correccionesAutomaticas[0]?.corregidoA).toBe('6540');
+
+    const wbPanal = XLSX.utils.book_new();
+    const wsPanal = XLSX.utils.aoa_to_sheet([
+      ['Código', 'Producto', 'Cantidad'],
+      ['6570', 'Pañal de agua Shark', 4]
+    ]);
+    XLSX.utils.book_append_sheet(wbPanal, wsPanal, 'Hoja1');
+    const resPanal = parsearExcelLista006(
+      XLSX.write(wbPanal, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer,
+      'panal.xlsx'
+    );
+    expect(resPanal.ok).toBe(true);
+    expect(resPanal.lineas[0]?.idGrupo).toBe('6570');
+    expect(resPanal.correccionesAutomaticas).toHaveLength(0);
+  });
+
+  it('63. Planilla General Maestra arrastrada en Nuevo Pedido se frena como PLANILLA_GENERAL_ADMIN', async () => {
+    const dino = CATALOGO_BY_CODIGO.get('6510')!;
+    const ped = recalcularPedido(makePedidoBase({ lineas: [resolverLinea(dino, 2, '')] }));
+    const { buffer } = await generarBufferTableroMaestro([ped], calcularResumenFinanciero([ped]));
+    const ab = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer;
+    const res = parsearExcelLista006(ab, 'PEDIDOS MAYORISTA MIBI.xlsx');
+    expect(res.ok).toBe(false);
+    expect(res.tipoArchivo).toBe('PLANILLA_GENERAL_ADMIN');
+    expect(res.errorFatal).toBe(
+      "Este archivo es una Planilla General de pedidos históricos. Para importarla, usá 'Planillas y Catálogo → Importar planilla previa'."
+    );
+  });
+
+  it('64. parsearFacturaAfipDesdePaginas lee ORIGINAL sin duplicar, valida bonificación 7% y bloquea descuadre de neto', () => {
+    const buildPage = (etiqueta: string, netoStr: string, totalStr: string): PaginaPdf => ({
+      numero: etiqueta === 'ORIGINAL' ? 1 : 2,
+      filas: [
+        { y: 806, celdas: [{ x: 264, texto: etiqueta }] },
+        { y: 774, celdas: [{ x: 290, texto: 'A' }] },
+        { y: 748, celdas: [{ x: 417, texto: '00009' }, { x: 517, texto: '00000039' }] },
+        { y: 732, celdas: [{ x: 341, texto: 'Fecha de Emisión:' }, { x: 428, texto: '24/11/2026' }] },
+        {
+          y: 661,
+          celdas: [
+            { x: 21, texto: 'CUIT:' },
+            { x: 52, texto: '30716778556' },
+            { x: 222, texto: 'Apellido y Nombre / Razón Social:' },
+            { x: 354, texto: 'TIENDAS OFICIALES S.R.L.' }
+          ]
+        },
+        {
+          y: 570,
+          celdas: [
+            { x: 19, texto: 'Código' },
+            { x: 59, texto: 'Producto / Servicio' },
+            { x: 239, texto: 'Cantidad' },
+            { x: 286, texto: 'U. medida' },
+            { x: 335, texto: 'Precio Unit.' },
+            { x: 388, texto: '% Bonif' },
+            { x: 435, texto: 'Subtotal' },
+            { x: 524, texto: 'Subtotal c/IVA' }
+          ]
+        },
+        {
+          y: 548,
+          celdas: [
+            { x: 18, texto: '6540' },
+            { x: 57, texto: 'Chaleco Bug 1-3a' },
+            { x: 265, texto: '3,00' },
+            { x: 288, texto: 'unidades' },
+            { x: 352, texto: '46611,57' },
+            { x: 398, texto: '7,00' },
+            { x: 441, texto: '130046,28' },
+            { x: 490, texto: '21%' },
+            { x: 541, texto: '157356,00' }
+          ]
+        },
+        {
+          y: 532,
+          celdas: [
+            { x: 18, texto: '6543' },
+            { x: 57, texto: 'Chaleco Lila Splash' },
+            { x: 265, texto: '3,00' },
+            { x: 288, texto: 'unidades' },
+            { x: 352, texto: '46611,57' },
+            { x: 398, texto: '7,00' },
+            { x: 441, texto: '130046,28' },
+            { x: 490, texto: '21%' },
+            { x: 541, texto: '157356,00' }
+          ]
+        },
+        { y: 260, celdas: [{ x: 300, texto: 'Subtotal:' }, { x: 520, texto: '260092,56' }] },
+        { y: 549, celdas: [{ x: 300, texto: 'TRANSPORTE:' }, { x: 520, texto: '260092,56' }] },
+        { y: 282, celdas: [{ x: 398, texto: 'Importe Neto Gravado: $' }, { x: 532, texto: netoStr }] },
+        { y: 256, celdas: [{ x: 457, texto: 'IVA 21%: $' }, { x: 532, texto: '54619,44' }] },
+        { y: 176, celdas: [{ x: 428, texto: 'Importe Total: $' }, { x: 522, texto: totalStr }] }
+      ]
+    });
+
+    const catMap = CATALOGO_EXTENDIDO_BY_CODIGO;
+    const resOk = parsearFacturaAfipDesdePaginas(
+      [buildPage('ORIGINAL', '260092,56', '314712,00'), buildPage('DUPLICADO', '260092,56', '314712,00')],
+      { fileName: 'factura.pdf', catalogoPorCodigo: catMap, catalogoUnificado: CATALOGO_EXTENDIDO_MIBI }
+    );
+    expect(resOk.ok).toBe(true);
+    expect(resOk.tipoArchivo).toBe('FACTURA_AFIP_PDF');
+    expect(resOk.datosDetectados?.cliente).toBe('TIENDAS OFICIALES S.R.L.');
+    expect(resOk.datosDetectados?.cuit).toBe('30716778556');
+    expect(resOk.datosDetectados?.numeroComprobante).toBe('00009-00000039');
+    expect(resOk.datosDetectados?.descuentoPorc).toBe(7);
+    expect(resOk.auditoria.unidadesLeidas).toBe(6);
+    expect(resOk.auditoria.estadoIntegridad).toBe('EXACTO');
+
+    const resBad = parsearFacturaAfipDesdePaginas(
+      [buildPage('ORIGINAL', '250000,00', '314712,00')],
+      { fileName: 'factura_bad.pdf', catalogoPorCodigo: catMap, catalogoUnificado: CATALOGO_EXTENDIDO_MIBI }
+    );
+    expect(resBad.auditoria.estadoIntegridad).toBe('BLOQUEADO');
+  });
+
+  it('65. analizarDocx detecta Alta de Clientes e ignora teléfonos de REFERENCIAS COMERCIALES', async () => {
+    const zip = new JSZip();
+    const xml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+      <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+        <w:body>
+          <w:p><w:r><w:t>ALTA DE CLIENTES</w:t></w:r></w:p>
+          <w:p><w:r><w:t>DATOS FISCALES</w:t></w:r></w:p>
+          <w:tbl>
+            <w:tr><w:tc><w:p><w:r><w:t>Nombre o razón social</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>FUKUOKA SRL</w:t></w:r></w:p></w:tc></w:tr>
+            <w:tr><w:tc><w:p><w:r><w:t>CUIT</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>33-71645291-9</w:t></w:r></w:p></w:tc></w:tr>
+            <w:tr><w:tc><w:p><w:r><w:t>Condición frente al IVA</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>☐* Responsable Inscripto ☐ Monotributista</w:t></w:r></w:p></w:tc></w:tr>
+            <w:tr><w:tc><w:p><w:r><w:t>Transporte</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Cruz del Sur</w:t></w:r></w:p></w:tc></w:tr>
+          </w:tbl>
+          <w:p><w:r><w:t>DATOS DE CONTACTO</w:t></w:r></w:p>
+          <w:tbl>
+            <w:tr><w:tc><w:p><w:r><w:t>Teléfono de contacto</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>294-4955229</w:t></w:r></w:p></w:tc></w:tr>
+          </w:tbl>
+          <w:p><w:r><w:t>REFERENCIAS COMERCIALES</w:t></w:r></w:p>
+          <w:tbl>
+            <w:tr><w:tc><w:p><w:r><w:t>Teléfono de contacto</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>11-9999-0000</w:t></w:r></w:p></w:tc></w:tr>
+          </w:tbl>
+        </w:body>
+      </w:document>`;
+    zip.file('word/document.xml', xml);
+    const bytes = new Uint8Array(await zip.generateAsync({ type: 'uint8array' }));
+    const res = await analizarDocx(bytes, {
+      fileName: 'alta.docx',
+      catalogoPorCodigo: CATALOGO_EXTENDIDO_BY_CODIGO,
+      catalogoUnificado: CATALOGO_EXTENDIDO_MIBI
+    });
+    expect(res.ok).toBe(true);
+    expect(res.tipoArchivo).toBe('ALTA_CLIENTE_DOCX');
+    expect(res.lineas).toHaveLength(0);
+    expect(res.datosDetectados?.cliente).toBe('FUKUOKA SRL');
+    expect(res.datosDetectados?.cuit).toBe('33716452919');
+    expect(res.datosDetectados?.whatsapp).toBe('294-4955229');
+    expect(res.datosDetectados?.transporte).toBe('Cruz del Sur');
+  });
+
+  it('66. POST /api/import/analizar bloquea DEPOSITO (403), detecta magic bytes reales y rechaza basura (415)', async () => {
+    mockSession = {
+      userId: '00000000-0000-4000-8000-000000000001',
+      username: 'admin',
+      nombre: 'Administración',
+      rol: 'ADMIN',
+      tokenVersion: 1
+    };
+    await reiniciarSistemaDal();
+    const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00]);
+    expect(await detectarFormatoPorFirma(pngBytes, 'pedido.xlsx')).toBe('PNG');
+    expect(parsearNumeroDocumento('23,800.00')).toBe(23800);
+    expect(parsearNumeroDocumento('46612,00')).toBe(46612);
+    expect(parsearNumeroDocumento('1.015.209,36')).toBe(1015209.36);
+
+    mockSession = {
+      userId: '00000000-0000-4000-8000-000000000006',
+      username: 'deposito',
+      nombre: 'Depósito',
+      rol: 'DEPOSITO',
+      tokenVersion: 1
+    };
+    const fdDep = new FormData();
+    fdDep.append('archivo', new File([pngBytes], 'pedido.xlsx', { type: 'application/octet-stream' }));
+    const res403 = await analizarImportPost(
+      new NextRequest('http://localhost/api/import/analizar', { method: 'POST', body: fdDep })
+    );
+    expect(res403.status).toBe(403);
+
+    mockSession = {
+      userId: '00000000-0000-4000-8000-000000000001',
+      username: 'admin',
+      nombre: 'Administración',
+      rol: 'ADMIN',
+      tokenVersion: 1
+    };
+    const fdPngDisguised = new FormData();
+    fdPngDisguised.append('archivo', new File([pngBytes], 'pedido.xlsx', { type: 'application/octet-stream' }));
+    const res200 = await analizarImportPost(
+      new NextRequest('http://localhost/api/import/analizar', { method: 'POST', body: fdPngDisguised })
+    );
+    expect(res200.status).toBe(200);
+    const body200 = (await res200.json()) as { tipoArchivo: string };
+    expect(body200.tipoArchivo).toBe('IMAGEN_O_PDF_ESCANEADO');
+
+    const fdBasura = new FormData();
+    fdBasura.append('archivo', new File([new Uint8Array([0x01, 0x02, 0x03, 0x04])], 'x.pdf'));
+    const res415 = await analizarImportPost(
+      new NextRequest('http://localhost/api/import/analizar', { method: 'POST', body: fdBasura })
+    );
+    expect(res415.status).toBe(415);
+  });
+
+  it('67. Notas de Pedido PDF y detector de pedidos duplicados funcionan en casos positivos y negativos', () => {
+    const p6508 = CATALOGO_BY_CODIGO.get('6508')!;
+    const rPdf1 = resolverLinea(p6508, 3, '6508 - 2 / 6509 - 1');
+    expect(rPdf1.estado).toBe('OK');
+    expect(rPdf1.desglose.find((v) => v.codigo === '6508')?.cantidad).toBe(2);
+    expect(rPdf1.desglose.find((v) => v.codigo === '6509')?.cantidad).toBe(1);
+
+    const p6504 = CATALOGO_BY_CODIGO.get('6504')!;
+    const rPdf2 = resolverLinea(p6504, 4, '1A3 - 2 / 3A6 - 2');
+    expect(rPdf2.estado).toBe('OK');
+    expect(rPdf2.desglose.find((v) => v.codigo === '6504')?.cantidad).toBe(2);
+    expect(rPdf2.desglose.find((v) => v.codigo === '6505')?.cantidad).toBe(2);
+
+    const ahora = Date.now();
+    const existente = makePedidoBase({
+      numeroPedido: '0099',
+      cliente: 'Casa Lorenzo',
+      observaciones: 'Factura AFIP 00009-00000041',
+      createdAt: ahora - 86400000,
+      lineas: [resolverLinea(p6508, 3, '6508 - 2 / 6509 - 1')]
+    });
+
+    expect(
+      detectarPedidoDuplicado({
+        cliente: 'casa lorenzo',
+        unidades: 3,
+        observaciones: '',
+        ahora,
+        pedidos: [existente]
+      })?.numeroPedido
+    ).toBe('0099');
+
+    expect(
+      detectarPedidoDuplicado({
+        cliente: 'Otro Cliente SRL',
+        unidades: 50,
+        observaciones: 'Factura AFIP 00009-00000041',
+        ahora,
+        pedidos: [existente]
+      })?.numeroPedido
+    ).toBe('0099');
+
+    expect(
+      detectarPedidoDuplicado({
+        cliente: 'Casa Lorenzo',
+        unidades: 10,
+        observaciones: '',
+        ahora,
+        pedidos: [existente]
+      })
+    ).toBeNull();
   });
 });
