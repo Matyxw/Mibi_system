@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   AlertTriangle,
   Check,
@@ -248,6 +249,18 @@ export function PedidoDrawer({
       setCuentaDestinoId('');
     }
   }, [pedido.id, focusTarget, cuentasDeposito]);
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    if (mostrarHojaImprimible) {
+      document.body.classList.add('mibi-printing-hoja');
+    } else {
+      document.body.classList.remove('mibi-printing-hoja');
+    }
+    return () => {
+      document.body.classList.remove('mibi-printing-hoja');
+    };
+  }, [mostrarHojaImprimible]);
 
   useEffect(() => {
     if (!focusTarget) return;
@@ -1016,7 +1029,84 @@ export function PedidoDrawer({
     : '';
   const waUrlAjusteWhatsapp = msgAjusteWhatsapp ? buildWhatsAppUrl(pedido.whatsapp, msgAjusteWhatsapp) : null;
 
+  const renderHojaDeposito = (modoVistaPrevia: boolean): React.ReactNode => (
+    <div
+      className={
+        modoVistaPrevia
+          ? 'space-y-4 bg-white text-[#111111] border border-zinc-200 rounded-2xl p-5'
+          : 'space-y-4 bg-white text-[#111111]'
+      }
+    >
+      <div className="flex items-start justify-between border-b border-zinc-200 pb-3">
+        <div>
+          <MibiLogo width={76} variant="pink" />
+          <div className="text-xs font-semibold text-[#111111] mt-2 flex items-center gap-2">
+            <span>HOJA PARA DEPÓSITO — PEDIDO #{pedido.numeroPedido}</span>
+            {esUrgenteDeposito && (
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-red-100 text-red-700">
+                URGENTE
+              </span>
+            )}
+          </div>
+          <div className="text-[11px] text-zinc-600">
+            Cliente: {pedido.cliente} · Transporte: {pedido.transporte || 'A definir'}
+            {pedido.despachoPrevisto ? ` · Despacho: ${formatShortDate(pedido.despachoPrevisto)}` : ''}
+          </div>
+          {notasDeposito && (
+            <div className="text-[11px] text-zinc-700 mt-1">
+              <strong>Nota operativa:</strong> {notasDeposito}
+            </div>
+          )}
+        </div>
+        {modoVistaPrevia && (
+          <button
+            type="button"
+            onClick={() => window.print()}
+            className="no-print px-3 py-1.5 rounded-full text-xs font-medium bg-zinc-900 text-white hover:bg-zinc-800"
+          >
+            Imprimir ahora
+          </button>
+        )}
+      </div>
+
+      <table className="w-full text-xs border-collapse text-[#111111]">
+        <thead>
+          <tr className="border-b border-zinc-300 text-zinc-600">
+            <th className="py-2 text-left">Código</th>
+            <th className="py-2 text-left">Producto</th>
+            <th className="py-2 text-left">Talle / Color</th>
+            <th className="py-2 text-right">Cantidad pedida</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-zinc-200/70 tabular-nums">
+          {pedido.lineas.flatMap((l) =>
+            l.desglose
+              .filter((d) => d.cantidad > 0)
+              .map((d) => (
+                <tr key={`${l.idLinea}-${d.codigo}`}>
+                  <td className="py-2 font-semibold">{d.codigo}</td>
+                  <td className="py-2">{l.nombreProducto}</td>
+                  <td className="py-2">{d.etiqueta}</td>
+                  <td className="py-2 text-right font-semibold">{d.cantidad}</td>
+                </tr>
+              ))
+          )}
+          <tr className="border-t-2 border-zinc-300 font-semibold">
+            <td colSpan={3} className="py-2.5 text-right text-zinc-600">
+              TOTAL UNIDADES
+            </td>
+            <td className="py-2.5 text-right tabular-nums">{totalUnidades}</td>
+          </tr>
+        </tbody>
+      </table>
+      <p className="mibi-print-end-block text-[10px] text-zinc-500 pt-2 border-t border-zinc-200">
+        Mibi® · Ciudad de la Paz 2467, Belgrano, CABA · WhatsApp 11-5606-9384 · contacto@mibi.com.ar
+      </p>
+    </div>
+  );
+
   return (
+    <>
     <div
       className="fixed inset-0 z-50 flex justify-end bg-black/25 dark:bg-black/60 backdrop-blur-[1px]"
       onClick={onClose}
@@ -1089,8 +1179,9 @@ export function PedidoDrawer({
                   <button
                     type="button"
                     onClick={() => {
+                      document.body.classList.add('mibi-printing-hoja');
                       setMostrarHojaImprimible(true);
-                      window.setTimeout(() => window.print(), 60);
+                      window.setTimeout(() => window.print(), 100);
                     }}
                     className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full text-xs font-medium bg-white border border-zinc-200 text-zinc-700 hover:bg-zinc-50 dark:bg-[#1B1B1F] dark:border-[#2E2E35] dark:text-zinc-200 dark:hover:bg-[#24242B] transition-colors"
                   >
@@ -1181,73 +1272,7 @@ export function PedidoDrawer({
           )}
 
           {mostrarHojaImprimible ? (
-            <div className="mibi-print-area space-y-4 bg-white text-[#111111] border border-zinc-200 rounded-2xl p-5">
-              <div className="flex items-start justify-between border-b border-zinc-200 pb-3">
-                <div>
-                  <MibiLogo width={76} variant="pink" />
-                  <div className="text-xs font-semibold text-[#111111] mt-2 flex items-center gap-2">
-                    <span>HOJA PARA DEPÓSITO — PEDIDO #{pedido.numeroPedido}</span>
-                    {esUrgenteDeposito && (
-                      <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-red-100 text-red-700">
-                        URGENTE
-                      </span>
-                    )}
-                  </div>
-                  <div className="text-[11px] text-zinc-600">
-                    Cliente: {pedido.cliente} · Transporte: {pedido.transporte || 'A definir'}
-                    {pedido.despachoPrevisto ? ` · Despacho: ${formatShortDate(pedido.despachoPrevisto)}` : ''}
-                  </div>
-                  {notasDeposito && (
-                    <div className="text-[11px] text-zinc-700 mt-1">
-                      <strong>Nota operativa:</strong> {notasDeposito}
-                    </div>
-                  )}
-                </div>
-                <button
-                  type="button"
-                  onClick={() => window.print()}
-                  className="no-print px-3 py-1.5 rounded-full text-xs font-medium bg-zinc-900 text-white hover:bg-zinc-800"
-                >
-                  Imprimir ahora
-                </button>
-              </div>
-
-              <table className="w-full text-xs border-collapse text-[#111111]">
-                <thead>
-                  <tr className="border-b border-zinc-200 text-zinc-600">
-                    <th className="py-2 text-left">Código</th>
-                    <th className="py-2 text-left">Producto</th>
-                    <th className="py-2 text-left">Talle / Color</th>
-                    <th className="py-2 text-right">Cantidad pedida</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-zinc-200/70 tabular-nums">
-                  {pedido.lineas.flatMap((l) =>
-                    l.desglose
-                      .filter((d) => d.cantidad > 0)
-                      .map((d) => (
-                        <tr key={`${l.idLinea}-${d.codigo}`}>
-                          <td className="py-2 font-semibold">{d.codigo}</td>
-                          <td className="py-2">{l.nombreProducto}</td>
-                          <td className="py-2">{d.etiqueta}</td>
-                          <td className="py-2 text-right font-semibold">{d.cantidad}</td>
-                        </tr>
-                      ))
-                  )}
-                </tbody>
-                <tfoot>
-                  <tr className="border-t border-zinc-300 font-semibold">
-                    <td colSpan={3} className="py-2.5 text-right text-zinc-600">
-                      TOTAL UNIDADES
-                    </td>
-                    <td className="py-2.5 text-right tabular-nums">{totalUnidades}</td>
-                  </tr>
-                </tfoot>
-              </table>
-              <p className="text-[10px] text-zinc-500 pt-2 border-t border-zinc-200">
-                Mibi® · Ciudad de la Paz 2467, Belgrano, CABA · WhatsApp 11-5606-9384 · contacto@mibi.com.ar
-              </p>
-            </div>
+            renderHojaDeposito(true)
           ) : (
             <>
               {esDeposito && (notasDeposito || esUrgenteDeposito || requiereRelectura) && (
@@ -2915,5 +2940,12 @@ export function PedidoDrawer({
         </div>
       </aside>
     </div>
+    {mostrarHojaImprimible && typeof document !== 'undefined'
+      ? createPortal(
+          <div className="hidden print:block mibi-print-portal">{renderHojaDeposito(false)}</div>,
+          document.body
+        )
+      : null}
+    </>
   );
 }

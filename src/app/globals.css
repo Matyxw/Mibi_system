@@ -10,6 +10,11 @@ html.dark {
   color-scheme: dark;
 }
 
+@page {
+  size: A4 portrait;
+  margin: 12mm 14mm;
+}
+
 @media print {
   html,
   html.dark,
@@ -17,26 +22,51 @@ html.dark {
     color-scheme: light !important;
     background: #ffffff !important;
     color: #111111 !important;
+    height: auto !important;
+    overflow: visible !important;
+    margin: 0 !important;
+    padding: 0 !important;
   }
-  body * {
-    visibility: hidden;
-  }
-  .mibi-print-area,
-  .mibi-print-area * {
-    visibility: visible;
-    color-scheme: light !important;
-  }
-  .mibi-print-area .no-print {
+
+  /* Aísla la hoja imprimible montada por portal en document.body sin ancestros fixed/overflow */
+  body.mibi-printing-hoja > *:not(.mibi-print-portal) {
     display: none !important;
   }
-  .mibi-print-area {
-    position: absolute;
-    left: 0;
-    top: 0;
-    width: 100%;
+
+  .mibi-print-portal {
+    display: block !important;
+    position: static !important;
+    width: 100% !important;
+    max-width: none !important;
+    height: auto !important;
+    overflow: visible !important;
     background: #ffffff !important;
     color: #111111 !important;
-    border-color: #d4d4d8 !important;
-    padding: 24px;
+    color-scheme: light !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+
+  .mibi-print-portal .no-print {
+    display: none !important;
+  }
+
+  .mibi-print-portal table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+
+  .mibi-print-portal thead {
+    display: table-header-group;
+  }
+
+  .mibi-print-portal tr {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  .mibi-print-portal .mibi-print-end-block {
+    break-inside: avoid;
+    page-break-inside: avoid;
   }
 }
