@@ -8,7 +8,7 @@ import {
   editarProductoCatalogoAction,
   listarProductosCustomAction
 } from '@/app/actions/catalogo-actions';
-import { CATALOGO_MIBI } from '@/lib/catalogo-mibi';
+import { CATALOGO_EXTENDIDO_MIBI } from '@/lib/catalogo-mibi';
 import { formatARS, round2 } from '@/lib/finanzas';
 import type { ProductoCustomRecord, ToneStatus } from '@/lib/types';
 import { StatusPill } from './status-pill';
@@ -25,7 +25,7 @@ interface CatalogoModalProps {
   onNotify: (texto: string, tone?: ToneStatus) => void;
 }
 
-const RUBROS_BASE = Array.from(new Set([...CATALOGO_MIBI.map((p) => p.rubro), 'PILUSOS', 'ACCESORIOS']));
+const RUBROS_BASE = Array.from(new Set([...CATALOGO_EXTENDIDO_MIBI.map((p) => p.rubro), 'PILUSOS', 'ACCESORIOS']));
 
 export function CatalogoModal({
   esAdmin,
@@ -189,7 +189,7 @@ export function CatalogoModal({
                 Catálogo fuera de planilla ({productos.length})
               </h2>
               <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
-                Pilusos y artículos adicionales combinados con Lista N° 006 ({CATALOGO_MIBI.length} grupos oficiales).
+                Pilusos y artículos adicionales combinados con Lista N° 006 ({CATALOGO_EXTENDIDO_MIBI.length} grupos oficiales).
               </p>
             </div>
           </div>

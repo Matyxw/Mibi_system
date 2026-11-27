@@ -4,7 +4,11 @@ import type { NextRequest } from 'next/server';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import * as XLSX from 'xlsx';
 import JSZip from 'jszip';
-import { CATALOGO_BY_CODIGO, CATALOGO_MIBI } from '@/lib/catalogo-mibi';
+import {
+  CATALOGO_BY_CODIGO,
+  CATALOGO_EXTENDIDO_BY_CODIGO,
+  CATALOGO_MIBI
+} from '@/lib/catalogo-mibi';
 import {
   addDaysISO,
   calcularResumenFinanciero,
@@ -1903,5 +1907,105 @@ describe('MIBI Core — Catálogo, Centavos, Excel, Seguridad y RBAC', () => {
       }
     );
     expect(msgSaldoFavor).toContain('Saldo a favor:');
+  });
+
+  // 56-58: Catálogo extendido 006 (Talle Único), notaciones de variantes y plantillas alternativas
+  it('56. Catálogo extendido reconoce Pilusos (6526) y Gorras (6527) como Talle Único sin pedir talles', () => {
+    expect(CATALOGO_MIBI).toHaveLength(54);
+    expect(CATALOGO_BY_CODIGO.size).toBe(69);
+
+    const piluso = CATALOGO_EXTENDIDO_BY_CODIGO.get('6526');
+    const gorra = CATALOGO_EXTENDIDO_BY_CODIGO.get('6527');
+    expect(piluso).toBeDefined();
+    expect(gorra).toBeDefined();
+
+    const rPiluso = resolverLinea(piluso!, 6, 'SURTIDO');
+    expect(rPiluso.estado).toBe('OK');
+    expect(rPiluso.desglose).toHaveLength(1);
+    expect(rPiluso.desglose[0]?.codigo).toBe('6526');
+    expect(rPiluso.desglose[0]?.cantidad).toBe(6);
+
+    const rGorra = resolverLinea(gorra!, 4, '');
+    expect(rGorra.estado).toBe('OK');
+    expect(rGorra.desglose).toHaveLength(1);
+    expect(rGorra.desglose[0]?.codigo).toBe('6527');
+    expect(rGorra.desglose[0]?.cantidad).toBe(4);
+  });
+
+  it('57. resolverLinea soporta códigos sueltos, c/u, iniciales de color y pares explícitos con colores', () => {
+    const monster = CATALOGO_BY_CODIGO.get('6502')!;
+    const rSoloCod = resolverLinea(monster, 4, '6502');
+    expect(rSoloCod.estado).toBe('OK');
+    expect(rSoloCod.desglose.find((v) => v.codigo === '6502')?.cantidad).toBe(4);
+    expect(rSoloCod.desglose.find((v) => v.codigo === '6503')?.cantidad).toBe(0);
+
+    const p6504 = CATALOGO_BY_CODIGO.get('6504')!;
+    const rCu = resolverLinea(p6504, 8, '4 c/u');
+    expect(rCu.estado).toBe('OK');
+    expect(rCu.desglose.map((v) => v.cantidad)).toEqual([4, 4]);
+
+    const p6562 = CATALOGO_BY_CODIGO.get('6562')!;
+    const rCadaTalle = resolverLinea(p6562, 4, '2 de cada talle');
+    expect(rCadaTalle.estado).toBe('OK');
+    expect(rCadaTalle.desglose.map((v) => v.cantidad)).toEqual([2, 2]);
+
+    const p6500 = CATALOGO_BY_CODIGO.get('6500')!;
+    const rAyR = resolverLinea(p6500, 6, 'A y R');
+    expect(rAyR.estado).toBe('OK');
+    expect(rAyR.desglose.map((v) => v.cantidad)).toEqual([3, 3]);
+
+    const rTalles = resolverLinea(p6562, 12, 'T1 (6562): 4 / T2 (6563): 8');
+    expect(rTalles.estado).toBe('OK');
+    expect(rTalles.desglose.find((v) => v.codigo === '6562')?.cantidad).toBe(4);
+    expect(rTalles.desglose.find((v) => v.codigo === '6563')?.cantidad).toBe(8);
+
+    const rX2 = resolverLinea(p6504, 4, '6504 X2/6505X2');
+    expect(rX2.estado).toBe('OK');
+    expect(rX2.desglose.find((v) => v.codigo === '6504')?.cantidad).toBe(2);
+    expect(rX2.desglose.find((v) => v.codigo === '6505')?.cantidad).toBe(2);
+
+    const p6508 = CATALOGO_BY_CODIGO.get('6508')!;
+    const rRx2Gx2 = resolverLinea(p6508, 4, 'R X2/G X2');
+    expect(rRx2Gx2.estado).toBe('OK');
+    expect(rRx2Gx2.desglose.reduce((s, v) => s + v.cantidad, 0)).toBe(4);
+
+    const rBeber = resolverLinea(p6508, 4, '6509: 2 u. — Pink / rojo; 6508: 2 u. — Green / verde');
+    expect(rBeber.estado).toBe('OK');
+    expect(rBeber.desglose.find((v) => v.codigo === '6509')?.cantidad).toBe(2);
+    expect(rBeber.desglose.find((v) => v.codigo === '6508')?.cantidad).toBe(2);
+  });
+
+  it('58. parsearExcelLista006 soporta plantillas alternativas sin cabecera LISTA N° 006', () => {
+    const wbAlmanero = XLSX.utils.book_new();
+    const wsAlmanero = XLSX.utils.aoa_to_sheet([
+      ['PEDIDO MAYORISTA CLIENTE'],
+      ['CÓDIGO T1', 'CÓDIGO T2', 'ARTÍCULO', 'T1', 'T2'],
+      ['6562', '6563', 'Chaleco Lovely', 3, 5],
+      ['6526', '', 'Pilusos Gabardina', 4, 0]
+    ]);
+    XLSX.utils.book_append_sheet(wbAlmanero, wsAlmanero, 'Pedido');
+    const bufAlmanero = XLSX.write(wbAlmanero, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer;
+    const resAlmanero = parsearExcelLista006(bufAlmanero, 'almanero_custom.xlsx');
+    expect(resAlmanero.ok).toBe(true);
+    expect(resAlmanero.advertencias).toHaveLength(0);
+    expect(resAlmanero.lineas).toHaveLength(2);
+    expect(resAlmanero.lineas[0]?.estado).toBe('OK');
+    expect(resAlmanero.lineas[0]?.cantidadTotal).toBe(8);
+    expect(resAlmanero.lineas[1]?.estado).toBe('OK');
+    expect(resAlmanero.lineas[1]?.desglose[0]?.codigo).toBe('6526');
+
+    const wbSingle = XLSX.utils.book_new();
+    const wsSingle = XLSX.utils.aoa_to_sheet([
+      ['Código', 'Modelo', 'Cantidad'],
+      ['6510', 'Antiparras Dino', 5],
+      ['6527', 'Gorras Polyester', 3]
+    ]);
+    XLSX.utils.book_append_sheet(wbSingle, wsSingle, 'Hoja1');
+    const bufSingle = XLSX.write(wbSingle, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer;
+    const resSingle = parsearExcelLista006(bufSingle, 'single_custom.xlsx');
+    expect(resSingle.ok).toBe(true);
+    expect(resSingle.advertencias).toHaveLength(0);
+    expect(resSingle.lineas).toHaveLength(2);
+    expect(resSingle.lineas.every((l) => l.estado === 'OK')).toBe(true);
   });
 });

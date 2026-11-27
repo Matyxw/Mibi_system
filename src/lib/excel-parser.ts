@@ -1,5 +1,10 @@
 import * as XLSX from 'xlsx';
-import { CATALOGO_BY_CODIGO, CATALOGO_BY_GRUPO, CATALOGO_MIBI } from './catalogo-mibi';
+import {
+  CATALOGO_BY_CODIGO,
+  CATALOGO_EXTENDIDO_BY_CODIGO,
+  CATALOGO_EXTENDIDO_BY_GRUPO,
+  CATALOGO_EXTENDIDO_MIBI
+} from './catalogo-mibi';
 import { addDaysISO, formatNowDateTime, getTodayISO, recalcularPedido, round2 } from './finanzas';
 import type {
   AdvertenciaExcel,
@@ -51,6 +56,79 @@ const COLORES_EXTRA_INVALIDOS = [
 const escapeRegex = (s: string): string =>
   s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
 
+const normalizarNotaDesglose = (notaNorm: string): string =>
+  notaNorm
+    // "T1 (6562): 4 / T2 (6563): 8" -> "t1 6562: 4 / t2 6563: 8"
+    .replace(/\(\s*([a-z0-9\-]+)\s*\)\s*(?::|=|-)?\s*(\d+)/gi, '$1: $2')
+    // "6504 X2/6505X2" -> "6504: 2/6505: 2"
+    .replace(/\b(\d{4})\s*[x*]\s*(\d+)\b/gi, '$1: $2')
+    // "R X2/G X2" o "t1x2" -> "r: 2/g: 2"
+    .replace(/\b([grpb]|t[12]|green|verde|pink|rosa|blue|azul|aqua)\s*[x*]\s*(\d+)\b/gi, '$1: $2');
+
+const detectarRepartoEquitativo = (
+  notaNorm: string,
+  numVariantes: number,
+  cantidadTotal: number
+): { ok: true; porVariante: number } | { ok: false; motivo: string } | null => {
+  if (numVariantes < 2) return null;
+
+  const mEach = notaNorm.match(
+    /^(\d+)\s*(?:c\/u\.?|c\.u\.|cada\s*un[oa]|de\s*cada\s*(?:un[oa]|talle|color)|(?:x|por)\s*(?:talle|color|cada|c\/u))$/i
+  );
+  if (mEach && mEach[1]) {
+    const porVar = parseInt(mEach[1], 10);
+    if (porVar * numVariantes === cantidadTotal) {
+      return { ok: true, porVariante: porVar };
+    }
+    return { ok: false, motivo: `${porVar} c/u (${porVar * numVariantes}) no coincide con el total ${cantidadTotal}` };
+  }
+
+  const esFraseEquitativa =
+    /^(?:c\/u\.?|c\.u\.|uno\s*de\s*cada(?:\s*(?:talle|color))?|de\s*cada\s*(?:talle|color|un[oa])|a\s*y\s*r|g\s*y\s*r|t1\s*y\s*t2|amb[oa]s|los\s*dos)$/i.test(
+      notaNorm
+    ) || /\b(mitad y mitad|50 y 50|50\/50)\b/i.test(notaNorm);
+
+  if (esFraseEquitativa) {
+    if (cantidadTotal % numVariantes !== 0) {
+      return { ok: false, motivo: `Cantidad (${cantidadTotal}) no divisible equitativamente entre ${numVariantes}` };
+    }
+    return { ok: true, porVariante: cantidadTotal / numVariantes };
+  }
+
+  return null;
+};
+
+const extraerCantidadVariante = (
+  variante: VarianteCatalogo,
+  notaParaParseo: string,
+  codigosProducto: Set<string>
+): number | null => {
+  const aliasList = variante.aliases.length > 0 ? variante.aliases : [variante.codigo, variante.etiqueta];
+  const aliasPattern = aliasList.map(escapeRegex).join('|');
+  const empiezaConNum = /^\s*\d+/.test(notaParaParseo);
+
+  const reColon = new RegExp(`\\b(?:${aliasPattern})\\b\\s*(?::|=|-)\\s*(\\d+)\\b`, 'gi');
+  const reAntes = new RegExp(`\\b(\\d+)\\s*(?:u\\.?|unid\\.?|de)?\\s*\\b(?:${aliasPattern})\\b`, 'gi');
+  const reDespues = new RegExp(`\\b(?:${aliasPattern})\\b\\s*(?::|=|-)?\\s*(\\d+)\\b`, 'gi');
+
+  const firstValid = (re: RegExp): number | null => {
+    for (const m of notaParaParseo.matchAll(re)) {
+      const digits = m[1];
+      if (!digits || codigosProducto.has(digits)) continue;
+      return parseInt(digits, 10);
+    }
+    return null;
+  };
+
+  const vColon = firstValid(reColon);
+  if (vColon !== null) return vColon;
+
+  if (empiezaConNum) {
+    return firstValid(reAntes) ?? firstValid(reDespues);
+  }
+  return firstValid(reDespues) ?? firstValid(reAntes);
+};
+
 export const resolverLinea = (
   producto: ProductoCatalogo,
   cantidadTotal: number,
@@ -59,7 +137,9 @@ export const resolverLinea = (
 ): LineaPedido => {
   const notaLimpia = limpiarTextoInvisible(notaClienteRaw);
   const notaNorm = normalizarTexto(notaLimpia);
+  const notaParaParseo = normalizarNotaDesglose(notaNorm);
   const idLinea = `${producto.idGrupo}${idLineaSuffix ? `-${idLineaSuffix}` : ''}`;
+  const codigosProducto = new Set(producto.variantes.map((v) => v.codigo.toLowerCase()));
 
   // Caso 1: Producto de variante única -> asignación directa 100% segura
   if (producto.variantes.length === 1) {
@@ -97,36 +177,33 @@ export const resolverLinea = (
     if (!notaNorm) {
       return fallbackN('Sin detalle de talle o color');
     }
+
+    const eqN = detectarRepartoEquitativo(notaNorm, producto.variantes.length, cantidadTotal);
+    if (eqN) {
+      if (!eqN.ok) return fallbackN(eqN.motivo);
+      return {
+        idLinea,
+        idGrupo: producto.idGrupo,
+        nombreProducto: producto.nombre,
+        rubro: producto.rubro,
+        precioUnitarioNeto: producto.precioNeto,
+        cantidadTotal,
+        notaCliente: notaLimpia,
+        estado: 'OK',
+        requiereRevision: false,
+        desglose: producto.variantes.map((v) => ({
+          codigo: v.codigo,
+          etiqueta: v.etiqueta,
+          cantidad: eqN.porVariante
+        }))
+      };
+    }
+
     if (/\b(surtid[oa]s?|variad[oa]s?|eleccion|mezclad[oa]s?|cualquiera)\b/.test(notaNorm)) {
       return fallbackN('Nota ambigua ("surtido" o similar)');
     }
 
-    const empiezaConNumN = /^\s*\d+/.test(notaNorm);
-    const extraerCantN = (variante: VarianteCatalogo): number | null => {
-      const aliasList = variante.aliases.length > 0 ? variante.aliases : [variante.codigo, variante.etiqueta];
-      const aliasPattern = aliasList.map(escapeRegex).join('|');
-      const reColon = new RegExp(`\\b(?:${aliasPattern})\\b\\s*(?::|=|-)\\s*(\\d+)`, 'i');
-      const reAntes = new RegExp(`(\\d+)\\s*(?:u\\.?|unid\\.?|de)?\\s*\\b(?:${aliasPattern})\\b`, 'i');
-      const reDespues = new RegExp(`\\b(?:${aliasPattern})\\b\\s*(?::|=|-)?\\s*(\\d+)`, 'i');
-
-      const mColon = notaNorm.match(reColon);
-      if (mColon && mColon[1]) return parseInt(mColon[1], 10);
-
-      if (empiezaConNumN) {
-        const mAntes = notaNorm.match(reAntes);
-        if (mAntes && mAntes[1]) return parseInt(mAntes[1], 10);
-        const mDespues = notaNorm.match(reDespues);
-        if (mDespues && mDespues[1]) return parseInt(mDespues[1], 10);
-      } else {
-        const mDespues = notaNorm.match(reDespues);
-        if (mDespues && mDespues[1]) return parseInt(mDespues[1], 10);
-        const mAntes = notaNorm.match(reAntes);
-        if (mAntes && mAntes[1]) return parseInt(mAntes[1], 10);
-      }
-      return null;
-    };
-
-    const cantidadesN = producto.variantes.map((v) => extraerCantN(v));
+    const cantidadesN = producto.variantes.map((v) => extraerCantidadVariante(v, notaParaParseo, codigosProducto));
     if (cantidadesN.some((c) => c !== null)) {
       const sum = cantidadesN.reduce<number>((acc, c) => acc + (c ?? 0), 0);
       if (sum === cantidadTotal) {
@@ -150,11 +227,15 @@ export const resolverLinea = (
       return fallbackN(`Las cantidades (${cantidadesN.map((c) => c ?? 0).join(' + ')}) no suman ${cantidadTotal}`);
     }
 
+    const notaSinCodigosN = producto.variantes.reduce(
+      (txt, v) => txt.replace(new RegExp(`\\b${escapeRegex(v.codigo)}\\b`, 'gi'), ' '),
+      notaNorm
+    );
     const mencionaVariantes = producto.variantes.map((v) =>
       v.aliases.some((al) => new RegExp(`\\b${escapeRegex(al)}\\b`, 'i').test(notaNorm))
     );
     const mencionesCount = mencionaVariantes.filter(Boolean).length;
-    if (mencionesCount === 1 && !/\d/.test(notaNorm)) {
+    if (mencionesCount === 1 && !/\d/.test(notaSinCodigosN)) {
       const idxUnico = mencionaVariantes.findIndex(Boolean);
       return {
         idLinea,
@@ -206,19 +287,9 @@ export const resolverLinea = (
     return fallbackRevision('Nota ambigua ("surtido" o similar)');
   }
 
-  const aliasesTodos = new Set([...v0.aliases, ...v1.aliases]);
-  for (const colorInv of COLORES_EXTRA_INVALIDOS) {
-    const reColor = new RegExp(`\\b${colorInv}\\b`, 'i');
-    if (reColor.test(notaNorm) && !aliasesTodos.has(colorInv)) {
-      return fallbackRevision(`Color "${colorInv}" no disponible en este modelo`);
-    }
-  }
-
-  if (/\b(mitad y mitad|50 y 50|50\/50)\b/.test(notaNorm)) {
-    if (cantidadTotal % 2 !== 0) {
-      return fallbackRevision(`Cantidad impar (${cantidadTotal}) para repartir mitad y mitad`);
-    }
-    const mitad = cantidadTotal / 2;
+  const eq2 = detectarRepartoEquitativo(notaNorm, 2, cantidadTotal);
+  if (eq2) {
+    if (!eq2.ok) return fallbackRevision(eq2.motivo);
     return {
       idLinea,
       idGrupo: producto.idGrupo,
@@ -230,8 +301,8 @@ export const resolverLinea = (
       estado: 'OK',
       requiereRevision: false,
       desglose: [
-        { codigo: v0.codigo, etiqueta: v0.etiqueta, cantidad: mitad },
-        { codigo: v1.codigo, etiqueta: v1.etiqueta, cantidad: mitad }
+        { codigo: v0.codigo, etiqueta: v0.etiqueta, cantidad: eq2.porVariante },
+        { codigo: v1.codigo, etiqueta: v1.etiqueta, cantidad: eq2.porVariante }
       ]
     };
   }
@@ -292,12 +363,67 @@ export const resolverLinea = (
     };
   }
 
-  const notaSinRangosEdad = notaNorm
+  // Intentar primero desglose explícito por códigos/aliases para tolerar textos descriptivos ("Pink / rojo")
+  let c0 = extraerCantidadVariante(v0, notaParaParseo, codigosProducto);
+  let c1 = extraerCantidadVariante(v1, notaParaParseo, codigosProducto);
+
+  // Recuperar typo de 1 dígito en nota con par explícito ("6585: 2/6587: 2" en par 6586-6587)
+  if ((c0 === null) !== (c1 === null)) {
+    const missingVar = c0 === null ? v0 : v1;
+    const matchedVar = c0 === null ? v1 : v0;
+    const matchedQty = (c0 ?? c1) ?? 0;
+    if (matchedQty > 0 && matchedQty <= cantidadTotal) {
+      for (const mTok of notaParaParseo.matchAll(/\b(\d{4})\b\s*(?::|=|-)\s*(\d+)\b/g)) {
+        const tok = mTok[1] ?? '';
+        const qTok = parseInt(mTok[2] ?? '0', 10);
+        if (
+          tok &&
+          tok !== matchedVar.codigo &&
+          distanciaEdicion(tok, missingVar.codigo.toLowerCase()) <= 1 &&
+          qTok + matchedQty === cantidadTotal
+        ) {
+          if (c0 === null) c0 = qTok;
+          else c1 = qTok;
+          break;
+        }
+      }
+    }
+  }
+
+  if (c0 !== null && c1 !== null && c0 + c1 === cantidadTotal && c0 >= 0 && c1 >= 0) {
+    return {
+      idLinea,
+      idGrupo: producto.idGrupo,
+      nombreProducto: producto.nombre,
+      rubro: producto.rubro,
+      precioUnitarioNeto: producto.precioNeto,
+      cantidadTotal,
+      notaCliente: notaLimpia,
+      estado: 'OK',
+      requiereRevision: false,
+      desglose: [
+        { codigo: v0.codigo, etiqueta: v0.etiqueta, cantidad: c0 },
+        { codigo: v1.codigo, etiqueta: v1.etiqueta, cantidad: c1 }
+      ]
+    };
+  }
+
+  const aliasesTodos = new Set([...v0.aliases, ...v1.aliases]);
+  for (const colorInv of COLORES_EXTRA_INVALIDOS) {
+    const reColor = new RegExp(`\\b${colorInv}\\b`, 'i');
+    if (reColor.test(notaNorm) && !aliasesTodos.has(colorInv)) {
+      return fallbackRevision(`Color "${colorInv}" no disponible en este modelo`);
+    }
+  }
+
+  const notaSinRangosNiCodigos = notaNorm
     .replace(/\b(?:de\s*)?1\s*a\s*3(?:\s*anos)?\b/g, ' ')
     .replace(/\b(?:de\s*)?3\s*a\s*6(?:\s*anos)?\b/g, ' ')
     .replace(/\btalle\s*[12]\b/g, ' ')
-    .replace(/\bt[12]\b/g, ' ');
-  const numerosSueltos = notaSinRangosEdad.match(/\d+/g);
+    .replace(/\bt[12]\b/g, ' ')
+    .replace(new RegExp(`\\b${escapeRegex(v0.codigo)}\\b`, 'gi'), ' ')
+    .replace(new RegExp(`\\b${escapeRegex(v1.codigo)}\\b`, 'gi'), ' ');
+  const numerosSueltos = notaSinRangosNiCodigos.match(/\d+/g);
 
   const aliasesV0SinTalle = v0.aliases.filter((a) => !['1 a 3', '1-3', 't1', 'talle 1'].includes(a));
   const aliasesV1SinTalle = v1.aliases.filter((a) => !['3 a 6', '3-6', 't2', 'talle 2'].includes(a));
@@ -344,33 +470,6 @@ export const resolverLinea = (
     }
   }
 
-  // Parseo explícito por alias + cantidad con límites de palabra estrictos (\b)
-  const empiezaConNumero = /^\s*\d+/.test(notaNorm);
-  const extraerCantidadVariante = (variante: VarianteCatalogo): number | null => {
-    const aliasPattern = variante.aliases.map(escapeRegex).join('|');
-    const reColon = new RegExp(`\\b(?:${aliasPattern})\\b\\s*(?::|=|-)\\s*(\\d+)`, 'i');
-    const reAntes = new RegExp(`(\\d+)\\s*(?:u\\.?|unid\\.?|de)?\\s*\\b(?:${aliasPattern})\\b`, 'i');
-    const reDespues = new RegExp(`\\b(?:${aliasPattern})\\b\\s*(?::|=|-)?\\s*(\\d+)`, 'i');
-
-    const mColon = notaNorm.match(reColon);
-    if (mColon && mColon[1]) return parseInt(mColon[1], 10);
-
-    if (empiezaConNumero) {
-      const mAntes = notaNorm.match(reAntes);
-      if (mAntes && mAntes[1]) return parseInt(mAntes[1], 10);
-      const mDespues = notaNorm.match(reDespues);
-      if (mDespues && mDespues[1]) return parseInt(mDespues[1], 10);
-    } else {
-      const mDespues = notaNorm.match(reDespues);
-      if (mDespues && mDespues[1]) return parseInt(mDespues[1], 10);
-      const mAntes = notaNorm.match(reAntes);
-      if (mAntes && mAntes[1]) return parseInt(mAntes[1], 10);
-    }
-    return null;
-  };
-
-  const c0 = extraerCantidadVariante(v0);
-  const c1 = extraerCantidadVariante(v1);
   if (c0 !== null || c1 !== null) {
     const q0 = c0 ?? 0;
     const q1 = c1 ?? 0;
@@ -404,7 +503,7 @@ export const aplicarResolucionLinea = (
 ): LineaPedido | null => {
   const catalogoExtra = Array.isArray(q1OrCatalogo) ? q1OrCatalogo : [];
   const prod =
-    catalogoExtra.find((p) => p.idGrupo === linea.idGrupo) ?? CATALOGO_BY_GRUPO.get(linea.idGrupo);
+    catalogoExtra.find((p) => p.idGrupo === linea.idGrupo) ?? CATALOGO_EXTENDIDO_BY_GRUPO.get(linea.idGrupo);
   const variantesBase: ReadonlyArray<{ codigo: string; etiqueta: string }> = prod
     ? prod.variantes
     : linea.desglose;
@@ -659,7 +758,7 @@ const distanciaEdicion = (a: string, b: string): number => {
 export const sugerirProductosCercanos = (
   codigoRaw: string,
   descripcionExcel: string,
-  catalogo: ReadonlyArray<ProductoCatalogo> = CATALOGO_MIBI
+  catalogo: ReadonlyArray<ProductoCatalogo> = CATALOGO_EXTENDIDO_MIBI
 ): SugerenciaProductoCatalogo[] => {
   const codTokens = limpiarTextoInvisible(codigoRaw)
     .toUpperCase()
@@ -808,11 +907,11 @@ export const aplicarLineaAlBorrador = (
 export const parsearExcelLista006 = (
   buffer: ArrayBuffer,
   fileName: string,
-  catalogoExtra: ReadonlyArray<ProductoCatalogo> = CATALOGO_MIBI
+  catalogoExtra: ReadonlyArray<ProductoCatalogo> = CATALOGO_EXTENDIDO_MIBI
 ): ResultadoParseoLista006 => {
-  const catalogoPorCodigo = new Map<string, ProductoCatalogo>(CATALOGO_BY_CODIGO);
+  const catalogoPorCodigo = new Map<string, ProductoCatalogo>(CATALOGO_EXTENDIDO_BY_CODIGO);
   const catalogoUnificadoMap = new Map<string, ProductoCatalogo>();
-  for (const prod of CATALOGO_MIBI) {
+  for (const prod of CATALOGO_EXTENDIDO_MIBI) {
     catalogoUnificadoMap.set(prod.idGrupo, prod);
   }
   for (const prod of catalogoExtra) {
@@ -837,29 +936,55 @@ export const parsearExcelLista006 = (
   }
 
   let esLista006 = false;
+  let tieneTablaEstructuradaMibi = false;
   for (const sheetName of wb.SheetNames) {
     const ws = wb.Sheets[sheetName];
     if (!ws) continue;
     const rows = expandirCeldasCombinadas(ws);
+    let sheetHasCodigoHeader = false;
+    let sheetHasQtyOrPriceHeader = false;
     for (const row of rows) {
-      for (const cell of row) {
-        if (cell === null) continue;
-        const txt = normalizarTexto(String(cell)).replace(/["°º]/g, ' ');
+      const rowTexts = row.map((c) => (c === null ? '' : normalizarTexto(String(c))));
+      for (const cellText of rowTexts) {
+        if (!cellText) continue;
+        const txt = cellText.replace(/["°º]/g, ' ');
         if (/lista\s*(?:n\s*)?0*6\b/.test(txt)) {
           esLista006 = true;
           break;
         }
       }
       if (esLista006) break;
+
+      if (rowTexts.some((t) => t === 'codigos' || t === 'codigo' || t === 'codigo t1')) {
+        sheetHasCodigoHeader = true;
+      }
+      if (
+        rowTexts.some(
+          (t) =>
+            t.includes('cantidades pedidas') ||
+            t.includes('cantidad pedida') ||
+            t.includes('pedidas t1') ||
+            t.includes('total pedido') ||
+            t === 't1' ||
+            t === 'cantidad' ||
+            t === 'cant' ||
+            t === 'precio c/desc'
+        )
+      ) {
+        sheetHasQtyOrPriceHeader = true;
+      }
+      if (sheetHasCodigoHeader && sheetHasQtyOrPriceHeader) {
+        tieneTablaEstructuradaMibi = true;
+      }
     }
     if (esLista006) break;
   }
 
-  if (!esLista006) {
+  if (!esLista006 && !tieneTablaEstructuradaMibi) {
     return {
       ok: false,
       errorFatal:
-        'El archivo subido no corresponde a la plantilla oficial LISTA N° 006 de Mibi® (no se detectó la cabecera "LISTA N° 006").',
+        'El archivo subido no corresponde a una plantilla compatible con Mibi® (LISTA N° 006 o tabla con columnas Código y Cantidad).',
       lineas: [],
       advertencias: [],
       avisosPrecio: []
@@ -871,17 +996,27 @@ export const parsearExcelLista006 = (
   let lineasAcumuladas: LineaPedido[] = [];
 
   for (const sheetName of wb.SheetNames) {
+    const sheetNorm = normalizarTexto(sheetName);
+    if ((sheetNorm === 'a revisar' || sheetNorm === 'resumen') && lineasAcumuladas.length > 0) {
+      continue;
+    }
+
     const ws = wb.Sheets[sheetName];
     if (!ws) continue;
     const rows = expandirCeldasCombinadas(ws);
 
     let colCodeA = 0;
-    let colCodeB = 1;
+    let colCodeEnd = 1; // rango inclusivo [colCodeA..colCodeEnd] para soportar 1 o más columnas de códigos antes de la descripción
     let colDesc = 2;
     let colPrecio = 3;
     let colQty = 4;
-    let colNota = 6;
+    let colTotalPed = -1;
+    let colT1 = -1;
+    let colT2 = -1;
+    let colNota = -1;
+    let colModelo = -1;
     let headerDetectado = false;
+    let hadNotaHeader = false;
 
     for (let rIdx = 0; rIdx < rows.length; rIdx++) {
       const row = rows[rIdx];
@@ -891,49 +1026,92 @@ export const parsearExcelLista006 = (
       const idxCantPed = rowTexts.findIndex(
         (t) => t.includes('cantidades pedidas') || t.includes('cantidad pedida')
       );
+      const idxT1 = rowTexts.findIndex((t) => t.includes('pedidas t1') || t === 't1' || t === 'talle 1');
+      const idxT2 = rowTexts.findIndex((t) => t.includes('pedidas t2') || t === 't2' || t === 'talle 2');
+      const idxTotalPed = rowTexts.findIndex((t) => t.includes('total pedido'));
       const idxCantFallback = rowTexts.findIndex((t) => t === 'cantidad' || t === 'cant');
       const idxTalleColor = rowTexts.findIndex(
         (t) => t.includes('talles/colores') || t.includes('talles / colores') || t.includes('talles/ colores')
       );
+      const idxModelo = rowTexts.findIndex((t) => t.includes('modelo') || t === 'talle');
       const idxDetalleFallback = rowTexts.findIndex((t) => t.includes('detalle') && !t.includes('producto'));
-      const idxCodigos = rowTexts.findIndex((t) => t === 'codigos' || t === 'codigo');
+      const idxCodigos = rowTexts.findIndex((t) => t === 'codigos' || t === 'codigo' || t === 'codigo t1');
+      const idxCodigoT2 = rowTexts.findIndex((t) => t === 'codigo t2');
       const idxPrecio = rowTexts.findIndex((t) => t === 'precio' || t.includes('precio neto'));
       const idxDesc = rowTexts.findIndex(
         (t) =>
           t === 'producto' ||
           t === 'productos' ||
           t === 'descripcion' ||
+          t === 'caracteristicas' ||
           t === 'articulo' ||
           t === 'articulos' ||
           t.includes('detalle producto') ||
           t.includes('detalle del producto')
       );
 
-      if (idxCantPed !== -1 || (idxCodigos !== -1 && (idxCantFallback !== -1 || idxPrecio !== -1))) {
+      if (
+        idxCantPed !== -1 ||
+        (idxT1 !== -1 && idxT2 !== -1) ||
+        (idxCodigos !== -1 && (idxCantFallback !== -1 || idxPrecio !== -1 || idxDesc !== -1))
+      ) {
         headerDetectado = true;
         if (idxCodigos !== -1) {
           colCodeA = idxCodigos;
-          colCodeB = idxCodigos + 1;
+          if (idxCodigoT2 !== -1) {
+            colCodeEnd = idxCodigoT2;
+          } else if (idxDesc > idxCodigos + 1) {
+            colCodeEnd = idxDesc - 1;
+          } else if (idxDesc === idxCodigos + 1) {
+            colCodeEnd = idxCodigos;
+          } else {
+            colCodeEnd = idxCodigos + 1;
+          }
         }
-        if (idxDesc !== -1) colDesc = idxDesc;
+        if (idxDesc !== -1) {
+          colDesc = idxDesc;
+          if (colCodeEnd >= idxDesc && idxDesc > colCodeA) {
+            colCodeEnd = idxDesc - 1;
+          }
+        }
         if (idxPrecio !== -1) colPrecio = idxPrecio;
-        if (idxCantPed !== -1) colQty = idxCantPed;
-        else if (idxCantFallback !== -1) colQty = idxCantFallback;
+        if (idxT1 !== -1 && idxT2 !== -1) {
+          colT1 = idxT1;
+          colT2 = idxT2;
+          colTotalPed = idxTotalPed;
+          if (idxTotalPed !== -1) colQty = idxTotalPed;
+        } else if (idxCantPed !== -1 || idxCantFallback !== -1 || idxTotalPed !== -1) {
+          colT1 = -1;
+          colT2 = -1;
+          colTotalPed = idxTotalPed;
+          if (idxTotalPed !== -1) colQty = idxTotalPed;
+          else if (idxCantPed !== -1) colQty = idxCantPed;
+          else if (idxCantFallback !== -1) colQty = idxCantFallback;
+        }
 
-        if (idxTalleColor !== -1) colNota = idxTalleColor;
-        else if (idxDetalleFallback !== -1) colNota = idxDetalleFallback;
+        if (idxTalleColor !== -1) {
+          colNota = idxTalleColor;
+          hadNotaHeader = true;
+        } else if (idxDetalleFallback !== -1) {
+          colNota = idxDetalleFallback;
+          hadNotaHeader = true;
+        } else if (!hadNotaHeader) {
+          colNota = -1;
+        }
+
+        if (idxModelo !== -1 && idxModelo !== colNota) colModelo = idxModelo;
         continue;
       }
 
-      const rawA = row[colCodeA] !== null && row[colCodeA] !== undefined ? String(row[colCodeA]) : '';
-      const rawB =
-        colCodeB < row.length && row[colCodeB] !== null && row[colCodeB] !== undefined
-          ? String(row[colCodeB])
-          : '';
-      const cleanA = limpiarTextoInvisible(rawA).toUpperCase();
-      const cleanB = limpiarTextoInvisible(rawB).toUpperCase();
       const extractCode = (txt: string): string | null => {
         if (!txt || PALABRAS_NO_CODIGO.has(txt)) return null;
+        if (
+          /\b(?:ENERO|FEBRERO|MARZO|ABRIL|MAYO|JUNIO|JULIO|AGOSTO|SEPTIEMBRE|OCTUBRE|NOVIEMBRE|DICIEMBRE)\b/.test(txt) ||
+          /\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}/.test(txt) ||
+          /^LISTA\b/.test(txt)
+        ) {
+          return null;
+        }
         if (catalogoPorCodigo.has(txt)) return txt;
         const mNum = txt.match(/\b(\d{4})\b/);
         if (mNum && mNum[1]) return mNum[1];
@@ -947,26 +1125,73 @@ export const parsearExcelLista006 = (
         }
         return null;
       };
-      const codeA = extractCode(cleanA);
-      const codeB = extractCode(cleanB);
 
       const codigosEnFila: string[] = [];
-      if (codeA) codigosEnFila.push(codeA);
-      if (codeB && codeB !== codeA) codigosEnFila.push(codeB);
-
-      if (codigosEnFila.length === 0) continue;
+      let esFilaTotal = false;
+      for (let cIdx = Math.max(0, colCodeA); cIdx <= Math.min(row.length - 1, colCodeEnd); cIdx++) {
+        const rawCell = row[cIdx];
+        if (rawCell === null || rawCell === undefined) continue;
+        const cleanCell = limpiarTextoInvisible(String(rawCell)).toUpperCase();
+        if (!cleanCell) continue;
+        if (cIdx === colCodeA && /^(?:TOTAL|SUBTOTAL)\b/.test(cleanCell)) {
+          esFilaTotal = true;
+          break;
+        }
+        if (
+          /\b(?:ENERO|FEBRERO|MARZO|ABRIL|MAYO|JUNIO|JULIO|AGOSTO|SEPTIEMBRE|OCTUBRE|NOVIEMBRE|DICIEMBRE)\b/.test(cleanCell) ||
+          /\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}/.test(cleanCell) ||
+          /^LISTA\b/.test(cleanCell)
+        ) {
+          continue;
+        }
+        for (const c4 of cleanCell.matchAll(/\b(\d{4})\b/g)) {
+          if (c4[1] && !codigosEnFila.includes(c4[1])) codigosEnFila.push(c4[1]);
+        }
+        const extracted = extractCode(cleanCell);
+        if (extracted && !codigosEnFila.includes(extracted)) {
+          codigosEnFila.push(extracted);
+        }
+      }
+      if (esFilaTotal || codigosEnFila.length === 0) continue;
 
       const descCell = headerDetectado ? (row[colDesc] ?? null) : (row[2] ?? null);
-      const qtyCell = headerDetectado ? (row[colQty] ?? null) : (row[4] ?? null);
-      const precioCell = headerDetectado ? (row[colPrecio] ?? null) : (row[3] ?? null);
-      const notaCell = headerDetectado ? (row[colNota] ?? null) : (row[6] ?? null);
+      const precioCell = headerDetectado ? (colPrecio >= 0 ? (row[colPrecio] ?? null) : null) : (row[3] ?? null);
+      const notaCell = headerDetectado ? (colNota >= 0 ? (row[colNota] ?? null) : null) : (row[6] ?? null);
+      const modeloCell = headerDetectado && colModelo >= 0 ? (row[colModelo] ?? null) : null;
+
+      // Cantidad: en plantillas con T1/T2 sin columna Total Pedido, sumar T1 + T2
+      const usaT1T2SinTotal = colT1 !== -1 && colT2 !== -1 && colTotalPed === -1;
+      const rawT1 = colT1 !== -1 ? (row[colT1] ?? null) : null;
+      const rawT2 = colT2 !== -1 ? (row[colT2] ?? null) : null;
+      const qtyCell = usaT1T2SinTotal
+        ? (() => {
+            const p1 = parsearCantidadEstricta(rawT1);
+            const p2 = parsearCantidadEstricta(rawT2);
+            if (p1.valid && p2.valid) return p1.qty + p2.qty;
+            return rawT1 ?? rawT2;
+          })()
+        : headerDetectado
+          ? (row[colQty] ?? null)
+          : (row[4] ?? null);
 
       const descripcionExcel =
         descCell !== null && descCell !== undefined ? limpiarTextoInvisible(String(descCell)) : '';
-      const notaDetectada =
+      if (/^(?:total|subtotal)\b/i.test(descripcionExcel)) continue;
+
+      const notaDetectadaRaw =
         notaCell !== null && notaCell !== undefined ? limpiarTextoInvisible(String(notaCell)) : '';
+      const modeloDetectado =
+        modeloCell !== null && modeloCell !== undefined ? limpiarTextoInvisible(String(modeloCell)) : '';
       const cantidadRaw =
         qtyCell !== null && qtyCell !== undefined ? limpiarTextoInvisible(String(qtyCell)) : '';
+
+      // Typo conocido en planilla Mazzaro: 6570 Chaleco Bug -> 6540
+      const descNormLower = normalizarTexto(descripcionExcel);
+      const codigosCorregidos = codigosEnFila.map((c) =>
+        c === '6570' && descNormLower.includes('chaleco') && (descNormLower.includes('bug') || normalizarTexto(modeloDetectado).includes('bug'))
+          ? '6540'
+          : c
+      );
 
       let precioExcelReferencia: number | null = null;
       if (precioCell !== null && precioCell !== undefined && limpiarTextoInvisible(String(precioCell)) !== '') {
@@ -983,7 +1208,7 @@ export const parsearExcelLista006 = (
 
       // Regla oficial: ignorar fila duplicada 6545 sin precio ni cantidad
       if (
-        codigosEnFila.includes('6545') &&
+        codigosCorregidos.includes('6545') &&
         (precioCell === null || String(precioCell).trim() === '') &&
         (qtyCell === null || String(qtyCell).trim() === '' || Number(qtyCell) === 0)
       ) {
@@ -991,15 +1216,18 @@ export const parsearExcelLista006 = (
       }
 
       let producto: ProductoCatalogo | undefined;
-      for (const cod of codigosEnFila) {
-        const encontrado = catalogoPorCodigo.get(cod.toUpperCase()) ?? CATALOGO_BY_CODIGO.get(cod);
+      for (const cod of codigosCorregidos) {
+        const encontrado =
+          catalogoPorCodigo.get(cod.toUpperCase()) ??
+          CATALOGO_EXTENDIDO_BY_CODIGO.get(cod) ??
+          CATALOGO_BY_CODIGO.get(cod);
         if (encontrado) {
           producto = encontrado;
           break;
         }
       }
 
-      const codigoJoined = codigosEnFila.join('/');
+      const codigoJoined = codigosCorregidos.join('/');
       const qtyRes = parsearCantidadEstricta(qtyCell);
       if (!qtyRes.valid) {
         advertencias.push({
@@ -1009,12 +1237,12 @@ export const parsearExcelLista006 = (
           mensaje: qtyRes.motivo ?? 'Cantidad inválida',
           id: `${sheetName}#${rIdx + 1}#${codigoJoined}#CANTIDAD_INVALIDA`,
           tipo: 'CANTIDAD_INVALIDA',
-          codigosDetectados: codigosEnFila,
+          codigosDetectados: codigosCorregidos,
           descripcionExcel,
           precioExcelReferencia,
           cantidadDetectada: null,
           cantidadRaw,
-          notaDetectada,
+          notaDetectada: notaDetectadaRaw || modeloDetectado,
           productoExistenteIdGrupo: producto ? producto.idGrupo : null,
           sugerenciasCatalogo: producto
             ? []
@@ -1033,16 +1261,32 @@ export const parsearExcelLista006 = (
           mensaje: `Código desconocido (${codigoJoined}) con cantidad ${qtyRes.qty}`,
           id: `${sheetName}#${rIdx + 1}#${codigoJoined}#CODIGO_DESCONOCIDO`,
           tipo: 'CODIGO_DESCONOCIDO',
-          codigosDetectados: codigosEnFila,
+          codigosDetectados: codigosCorregidos,
           descripcionExcel,
           precioExcelReferencia,
           cantidadDetectada: qtyRes.qty,
           cantidadRaw,
-          notaDetectada,
+          notaDetectada: notaDetectadaRaw || modeloDetectado,
           productoExistenteIdGrupo: null,
           sugerenciasCatalogo: sugerirProductosCercanos(codigoJoined, descripcionExcel, catalogoUnificado)
         });
         continue;
+      }
+
+      // Construir nota final con prioridad: columnas T1/T2 separadas -> nota explícita -> código único / modelo
+      let notaFinal = notaDetectadaRaw;
+      if (colT1 !== -1 && colT2 !== -1 && producto.variantes.length === 2) {
+        const q1Res = parsearCantidadEstricta(row[colT1] ?? 0);
+        const q2Res = parsearCantidadEstricta(row[colT2] ?? 0);
+        if (q1Res.valid && q2Res.valid && q1Res.qty + q2Res.qty === qtyRes.qty) {
+          notaFinal = `${producto.variantes[0]!.codigo}: ${q1Res.qty} / ${producto.variantes[1]!.codigo}: ${q2Res.qty}`;
+        }
+      } else if (!notaFinal && producto.variantes.length >= 2) {
+        if (codigosCorregidos.length === 1) {
+          notaFinal = codigosCorregidos[0]!;
+        } else if (modeloDetectado) {
+          notaFinal = modeloDetectado;
+        }
       }
 
       // Auditoría de precio informativa sin confiar nunca en el precio de la planilla
@@ -1060,7 +1304,7 @@ export const parsearExcelLista006 = (
         });
       }
 
-      lineasAcumuladas = aplicarLineaAlBorrador(lineasAcumuladas, producto, qtyRes.qty, notaDetectada);
+      lineasAcumuladas = aplicarLineaAlBorrador(lineasAcumuladas, producto, qtyRes.qty, notaFinal);
     }
   }
 

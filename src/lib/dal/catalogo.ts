@@ -2,7 +2,7 @@ import 'server-only';
 
 import { randomUUID } from 'node:crypto';
 import { desc, eq } from 'drizzle-orm';
-import { CATALOGO_BY_CODIGO, CATALOGO_MIBI } from '@/lib/catalogo-mibi';
+import { CATALOGO_EXTENDIDO_BY_CODIGO, CATALOGO_EXTENDIDO_MIBI } from '@/lib/catalogo-mibi';
 import { getDb, isLocalFallbackMode, readLocalStore, writeLocalStore } from '@/lib/db';
 import { productosCustom } from '@/lib/db/schema';
 import { normalizarTexto } from '@/lib/excel-parser';
@@ -63,7 +63,7 @@ const collectUsedCodes = (
   excludeCustomId?: string
 ): Set<string> => {
   const used = new Set<string>();
-  for (const code of CATALOGO_BY_CODIGO.keys()) {
+  for (const code of CATALOGO_EXTENDIDO_BY_CODIGO.keys()) {
     used.add(code.toUpperCase());
   }
   for (const rec of customRecords) {
@@ -172,7 +172,7 @@ export const listarProductosCustomDal = async (includeArchived = false): Promise
 
 export const getCatalogoCompletoDal = async (): Promise<ProductoCatalogo[]> => {
   const customActivos = await listarProductosCustomDal(false);
-  return [...CATALOGO_MIBI, ...customActivos.map(customRecordToProductoCatalogo)];
+  return [...CATALOGO_EXTENDIDO_MIBI, ...customActivos.map(customRecordToProductoCatalogo)];
 };
 
 export const crearProductoCatalogoDal = async (

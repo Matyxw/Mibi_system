@@ -1,4 +1,4 @@
-import { CATALOGO_BY_GRUPO } from './catalogo-mibi';
+import { CATALOGO_EXTENDIDO_BY_GRUPO } from './catalogo-mibi';
 import { formatARS } from './finanzas';
 import type { LineaPedido, Pedido, ProductoCatalogo, ResumenAjusteArticulos } from './types';
 
@@ -18,7 +18,7 @@ export const generarMensajeWhatsApp = (
 
   const lista = pendientes
     .map((l) => {
-      const prod = extraByGrupo.get(l.idGrupo) ?? CATALOGO_BY_GRUPO.get(l.idGrupo);
+      const prod = extraByGrupo.get(l.idGrupo) ?? CATALOGO_EXTENDIDO_BY_GRUPO.get(l.idGrupo);
       const variantes = prod ? prod.variantes : l.desglose;
       const opciones = variantes.map((v) => `${v.etiqueta} (${v.codigo})`).join(' / ');
       return `• ${l.nombreProducto} — ${l.cantidadTotal} u. (elegir entre: ${opciones})`;

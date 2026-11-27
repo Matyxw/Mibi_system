@@ -2,7 +2,7 @@ import 'server-only';
 
 import { randomUUID } from 'node:crypto';
 import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
-import { CATALOGO_BY_GRUPO } from '@/lib/catalogo-mibi';
+import { CATALOGO_EXTENDIDO_BY_GRUPO } from '@/lib/catalogo-mibi';
 import { getDb, isLocalFallbackMode, readLocalStore, writeLocalStore } from '@/lib/db';
 import {
   pedidoAsignaciones,
@@ -211,7 +211,7 @@ const sanitizarLineasContraCatalogo = (
       };
     }
 
-    const prodOficial = CATALOGO_BY_GRUPO.get(l.idGrupo);
+    const prodOficial = CATALOGO_EXTENDIDO_BY_GRUPO.get(l.idGrupo);
     const prodCustom = customActivosByGrupo.get(l.idGrupo);
     const esAdhoc = l.idGrupo.startsWith('ADHOC-');
 

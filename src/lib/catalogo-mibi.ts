@@ -452,3 +452,228 @@ for (const prod of CATALOGO_MIBI) {
     CATALOGO_BY_CODIGO.set(v.codigo, prod);
   }
 }
+
+// Artículos complementarios presentes en las filas 74–108 de LISTA N° 006 (Ponchos, Toallas, Pilusos y Gorras)
+export const CATALOGO_COMPLEMENTARIO_006: ReadonlyArray<ProductoCatalogo> = [
+  // PONCHOS
+  {
+    idGrupo: '6514',
+    nombre: 'Poncho Shark (60x60)',
+    rubro: 'PONCHOS',
+    precioNeto: 21487.6,
+    variantes: [{ codigo: '6514', etiqueta: 'Talle Único', aliases: ['unico', '6514'] }]
+  },
+  {
+    idGrupo: '6515',
+    nombre: 'Poncho Octopus (60x60)',
+    rubro: 'PONCHOS',
+    precioNeto: 21487.6,
+    variantes: [{ codigo: '6515', etiqueta: 'Talle Único', aliases: ['unico', '6515'] }]
+  },
+  {
+    idGrupo: '6516-6517',
+    nombre: 'Poncho Monsters (60x60)',
+    rubro: 'PONCHOS',
+    precioNeto: 21487.6,
+    variantes: [
+      { codigo: '6516', etiqueta: 'Green (Verde)', aliases: ['g', 'green', 'verde', '6516'] },
+      { codigo: '6517', etiqueta: 'Pink (Rosa)', aliases: ['p', 'r', 'pink', 'rosa', '6517'] }
+    ]
+  },
+  {
+    idGrupo: '6518-6519',
+    nombre: 'Poncho Bubble (60x60)',
+    rubro: 'PONCHOS',
+    precioNeto: 21487.6,
+    variantes: [
+      { codigo: '6518', etiqueta: 'Green (Verde)', aliases: ['g', 'green', 'verde', '6518'] },
+      { codigo: '6519', etiqueta: 'Pink (Rosa)', aliases: ['p', 'r', 'pink', 'rosa', '6519'] }
+    ]
+  },
+  {
+    idGrupo: '6546',
+    nombre: 'Poncho Monster Neon (60x60)',
+    rubro: 'PONCHOS',
+    precioNeto: 23966.94,
+    variantes: [{ codigo: '6546', etiqueta: 'Talle Único', aliases: ['unico', '6546'] }]
+  },
+  {
+    idGrupo: '6551',
+    nombre: 'Poncho Lila Splash (60x60)',
+    rubro: 'PONCHOS',
+    precioNeto: 23966.94,
+    variantes: [{ codigo: '6551', etiqueta: 'Talle Único', aliases: ['unico', '6551'] }]
+  },
+  {
+    idGrupo: '6599',
+    nombre: 'Poncho Rabb (60x60)',
+    rubro: 'PONCHOS',
+    precioNeto: 23966.94,
+    variantes: [{ codigo: '6599', etiqueta: 'Talle Único', aliases: ['unico', '6599'] }]
+  },
+  {
+    idGrupo: '6600',
+    nombre: 'Poncho Coco (60x60)',
+    rubro: 'PONCHOS',
+    precioNeto: 23966.94,
+    variantes: [{ codigo: '6600', etiqueta: 'Talle Único', aliases: ['unico', '6600'] }]
+  },
+  {
+    idGrupo: '6601',
+    nombre: 'Poncho Lovely (60x60)',
+    rubro: 'PONCHOS',
+    precioNeto: 23966.94,
+    variantes: [{ codigo: '6601', etiqueta: 'Talle Único', aliases: ['unico', '6601'] }]
+  },
+  {
+    idGrupo: '6552',
+    nombre: 'Poncho Crab Pop (60x60)',
+    rubro: 'PONCHOS',
+    precioNeto: 25785,
+    variantes: [{ codigo: '6552', etiqueta: 'Talle Único', aliases: ['unico', '6552'] }]
+  },
+
+  // TOALLAS MICROFIBRA
+  {
+    idGrupo: '6520-6521',
+    nombre: 'Toallas Bubble Microfibra (1,50x0,90)',
+    rubro: 'TOALLAS',
+    precioNeto: 18595.04,
+    variantes: [
+      { codigo: '6520', etiqueta: 'Blue (Azul / P)', aliases: ['b', 'blue', 'azul', 'p', '6520'] },
+      { codigo: '6521', etiqueta: 'Pink (Rosa / B)', aliases: ['pink', 'rosa', 'r', 'b', '6521'] }
+    ]
+  },
+  {
+    idGrupo: '6522',
+    nombre: 'Toalla Shark Microfibra (1,50x0,90)',
+    rubro: 'TOALLAS',
+    precioNeto: 18595.04,
+    variantes: [{ codigo: '6522', etiqueta: 'Talle Único', aliases: ['unico', '6522'] }]
+  },
+  {
+    idGrupo: '6523',
+    nombre: 'Toalla Octopus Microfibra (1,50x0,90)',
+    rubro: 'TOALLAS',
+    precioNeto: 18181.81,
+    variantes: [{ codigo: '6523', etiqueta: 'Talle Único', aliases: ['unico', '6523'] }]
+  },
+  {
+    idGrupo: '6524-6525',
+    nombre: 'Toallas Monsters Microfibra (1,50x0,90)',
+    rubro: 'TOALLAS',
+    precioNeto: 18595.04,
+    variantes: [
+      { codigo: '6524', etiqueta: 'Green / Pink', aliases: ['g', 'green', 'verde', 'p', '6524'] },
+      { codigo: '6525', etiqueta: 'Blue / Pink', aliases: ['b', 'blue', 'azul', 'pink', 'rosa', '6525'] }
+    ]
+  },
+  {
+    idGrupo: '6554',
+    nombre: 'Toalla Monster Neon Microfibra (1,50x0,70)',
+    rubro: 'TOALLAS',
+    precioNeto: 18595.04,
+    variantes: [{ codigo: '6554', etiqueta: 'Talle Único', aliases: ['unico', '6554'] }]
+  },
+  {
+    idGrupo: '6555',
+    nombre: 'Toalla Petit Microfibra (1,50x0,90)',
+    rubro: 'TOALLAS',
+    precioNeto: 18595.04,
+    variantes: [{ codigo: '6555', etiqueta: 'Talle Único', aliases: ['unico', '6555'] }]
+  },
+  {
+    idGrupo: '6556',
+    nombre: 'Toalla Bug Microfibra (1,50x0,90)',
+    rubro: 'TOALLAS',
+    precioNeto: 18595.04,
+    variantes: [{ codigo: '6556', etiqueta: 'Talle Único', aliases: ['unico', '6556'] }]
+  },
+  {
+    idGrupo: '6557',
+    nombre: 'Toalla Margarita Microfibra (1,50x0,90)',
+    rubro: 'TOALLAS',
+    precioNeto: 18595.04,
+    variantes: [{ codigo: '6557', etiqueta: 'Talle Único', aliases: ['unico', '6557'] }]
+  },
+  {
+    idGrupo: '6558',
+    nombre: 'Toalla Ocean Microfibra (1,50x0,90)',
+    rubro: 'TOALLAS',
+    precioNeto: 18595.04,
+    variantes: [{ codigo: '6558', etiqueta: 'Talle Único', aliases: ['unico', '6558'] }]
+  },
+  {
+    idGrupo: '6559',
+    nombre: 'Toalla Lila Splash Microfibra (1,50x0,90)',
+    rubro: 'TOALLAS',
+    precioNeto: 18595.04,
+    variantes: [{ codigo: '6559', etiqueta: 'Talle Único', aliases: ['unico', '6559'] }]
+  },
+  {
+    idGrupo: '6560',
+    nombre: 'Toalla Crab Pop Microfibra (1,50x0,90)',
+    rubro: 'TOALLAS',
+    precioNeto: 18595.04,
+    variantes: [{ codigo: '6560', etiqueta: 'Talle Único', aliases: ['unico', '6560'] }]
+  },
+  {
+    idGrupo: '6561',
+    nombre: 'Toalla Crabby Cool Microfibra (1,50x0,90)',
+    rubro: 'TOALLAS',
+    precioNeto: 18595.04,
+    variantes: [{ codigo: '6561', etiqueta: 'Talle Único', aliases: ['unico', '6561'] }]
+  },
+  {
+    idGrupo: '6596',
+    nombre: 'Toalla Rabb Microfibra (1,50x0,90)',
+    rubro: 'TOALLAS',
+    precioNeto: 18595.04,
+    variantes: [{ codigo: '6596', etiqueta: 'Talle Único', aliases: ['unico', '6596'] }]
+  },
+  {
+    idGrupo: '6597',
+    nombre: 'Toalla Coco Microfibra (1,50x0,90)',
+    rubro: 'TOALLAS',
+    precioNeto: 18595.04,
+    variantes: [{ codigo: '6597', etiqueta: 'Talle Único', aliases: ['unico', '6597'] }]
+  },
+  {
+    idGrupo: '6598',
+    nombre: 'Toalla Lovely Microfibra (1,50x0,90)',
+    rubro: 'TOALLAS',
+    precioNeto: 18595.04,
+    variantes: [{ codigo: '6598', etiqueta: 'Talle Único', aliases: ['unico', '6598'] }]
+  },
+
+  // PILUSOS Y GORRAS (TALLE ÚNICO)
+  {
+    idGrupo: '6526',
+    nombre: 'Pilusos Gabardina',
+    rubro: 'PILUSOS',
+    precioNeto: 6942.14,
+    variantes: [{ codigo: '6526', etiqueta: 'Talle Único', aliases: ['unico', 'surtido', 'varios', '6526'] }]
+  },
+  {
+    idGrupo: '6527',
+    nombre: 'Gorras Polyester con Red',
+    rubro: 'GORRAS',
+    precioNeto: 6942.14,
+    variantes: [{ codigo: '6527', etiqueta: 'Talle Único', aliases: ['unico', 'surtido', '6527'] }]
+  }
+];
+
+export const CATALOGO_EXTENDIDO_MIBI: ReadonlyArray<ProductoCatalogo> = [
+  ...CATALOGO_MIBI,
+  ...CATALOGO_COMPLEMENTARIO_006
+];
+
+export const CATALOGO_EXTENDIDO_BY_GRUPO = new Map<string, ProductoCatalogo>();
+export const CATALOGO_EXTENDIDO_BY_CODIGO = new Map<string, ProductoCatalogo>();
+
+for (const prod of CATALOGO_EXTENDIDO_MIBI) {
+  CATALOGO_EXTENDIDO_BY_GRUPO.set(prod.idGrupo, prod);
+  for (const v of prod.variantes) {
+    CATALOGO_EXTENDIDO_BY_CODIGO.set(v.codigo, prod);
+  }
+}

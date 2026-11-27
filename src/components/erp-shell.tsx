@@ -35,7 +35,7 @@ import {
   softDeletePedidosAction
 } from '@/app/actions/pedidos-actions';
 import { listarCuentasAsignablesAction } from '@/app/actions/usuarios-actions';
-import { CATALOGO_MIBI, MIBI_BRAND } from '@/lib/catalogo-mibi';
+import { CATALOGO_EXTENDIDO_MIBI, MIBI_BRAND } from '@/lib/catalogo-mibi';
 import type { EnviarCuentasResult, SyncStatusResult } from '@/lib/dal/pedidos';
 import { aplicarResolucionLinea } from '@/lib/excel-parser';
 import {
@@ -215,7 +215,7 @@ export function ErpShell({
         activo: c.activo,
         customId: c.id
       }));
-    return [...CATALOGO_MIBI, ...customMapped];
+    return [...CATALOGO_EXTENDIDO_MIBI, ...customMapped];
   }, [productosCustom]);
 
   const transportesConocidos = useMemo<string[]>(() => {
