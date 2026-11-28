@@ -93,10 +93,18 @@ import { POST as exportTableroPost } from '@/app/api/export/tablero/route';
 import { POST as analizarImportPost } from '@/app/api/import/analizar/route';
 import { AuthError } from '@/lib/dal/auth';
 import { detectarPedidoDuplicado } from '@/lib/import/anti-duplicado';
+import { analizarPlanillaAsync } from '@/lib/import/analizar-planilla';
 import { analizarDocx } from '@/lib/import/docx-parser';
 import { detectarFormatoPorFirma } from '@/lib/import/firma-archivo';
 import { parsearNumeroDocumento } from '@/lib/import/numeros';
 import { parsearFacturaAfipDesdePaginas, type PaginaPdf } from '@/lib/import/pdf-parser';
+import {
+  extraerCeldasTachadasXlsx,
+  extraerEstilosYComentariosXlsx,
+  leerArchivoZipTextoSeguro,
+  limpiarTextoComentarioExcel,
+  MAX_XML_UNCOMPRESSED_BYTES
+} from '@/lib/import/xlsx-estilos';
 
 const makePedidoBase = (overrides: Partial<PedidoBase> = {}): PedidoBase => ({
   id: 'ped_test_1',
@@ -2371,5 +2379,407 @@ describe('MIBI Core — Catálogo, Centavos, Excel, Seguridad y RBAC', () => {
         pedidos: [existente]
       })
     ).toBeNull();
+  });
+
+  it('68. Blindaje 1: detecta FILA_OCULTA con cantidad > 0 e ignora filas ocultas vacías/0 de plantilla', () => {
+    const p1 = CATALOGO_MIBI.find((p) => p.variantes.length === 1)!;
+    const p2 = CATALOGO_MIBI.find((p) => p.variantes.length === 1 && p.idGrupo !== p1.idGrupo)!;
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet([
+      ['CODIGO', 'DETALLE', 'CANTIDAD', 'PRECIO'],
+      [p1.variantes[0]!.codigo, p1.nombre, 2, p1.precioNeto],
+      [p2.variantes[0]!.codigo, p2.nombre, 3, p2.precioNeto],
+      [p2.variantes[0]!.codigo, 'Fila plantilla vacía oculta', 0, p2.precioNeto],
+      ['', 'Título sección oculta', '', '']
+    ]);
+    ws['!rows'] = [{}, {}, { hidden: true }, { hidden: true }, { hidden: true }];
+    XLSX.utils.book_append_sheet(wb, ws, 'Pedido');
+    const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer;
+    const res = parsearExcelLista006(buf, 'ocultas.xlsx', CATALOGO_EXTENDIDO_MIBI);
+    expect(res.ok).toBe(true);
+    expect(res.lineas).toHaveLength(1);
+    expect(res.lineas[0]!.cantidadTotal).toBe(2);
+    const ocultas = res.advertencias.filter((a) => a.tipo === 'FILA_OCULTA');
+    expect(ocultas).toHaveLength(1);
+    expect(ocultas[0]!.fila).toBe(3);
+    expect(ocultas[0]!.cantidadDetectada).toBe(3);
+  });
+
+  it('69. Blindaje 2: detecta FILA_TACHADA vía styles.xml + sharedStrings.xml sin IA y excluye del borrador', async () => {
+    const p1 = CATALOGO_MIBI.find((p) => p.variantes.length === 1)!;
+    const p2 = CATALOGO_MIBI.find((p) => p.variantes.length === 1 && p.idGrupo !== p1.idGrupo)!;
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet([
+      ['CODIGO', 'DETALLE', 'CANTIDAD', 'PRECIO'],
+      [p1.variantes[0]!.codigo, p1.nombre, 2, p1.precioNeto],
+      [p2.variantes[0]!.codigo, p2.nombre, 4, p2.precioNeto]
+    ]);
+    XLSX.utils.book_append_sheet(wb, ws, 'Pedido');
+    const baseBytes = XLSX.write(wb, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer;
+    const zip = await JSZip.loadAsync(baseBytes);
+
+    // Inyectamos styles.xml con xf s="1" que apunta a un font con <strike/>
+    const stylesXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+      <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+        <fonts count="2">
+          <font><sz val="11"/><name val="Calibri"/></font>
+          <font><strike/><sz val="11"/><name val="Calibri"/></font>
+        </fonts>
+        <fills count="1"><fill><patternFill patternType="none"/></fill></fills>
+        <borders count="1"><border/></borders>
+        <cellXfs count="2">
+          <xf fontId="0" fillId="0" borderId="0"/>
+          <xf fontId="1" fillId="0" borderId="0" applyFont="1"/>
+        </cellXfs>
+      </styleSheet>`;
+    zip.file('xl/styles.xml', stylesXml);
+    const sheetOrig = await zip.file('xl/worksheets/sheet1.xml')!.async('string');
+    const sheetMod = sheetOrig.replace(/<c r="C3"/g, '<c r="C3" s="1"');
+    zip.file('xl/worksheets/sheet1.xml', sheetMod);
+
+    const outBuf = await zip.generateAsync({ type: 'arraybuffer' });
+    const tachadas = await extraerCeldasTachadasXlsx(outBuf);
+    expect(tachadas.get('Pedido')?.has('2:2')).toBe(true);
+
+    const res = await analizarPlanillaAsync({
+      buffer: outBuf,
+      nombre: 'tachada.xlsx',
+      catalogo: CATALOGO_EXTENDIDO_MIBI
+    });
+    expect(res.ok).toBe(true);
+    expect(res.lineas).toHaveLength(1);
+    expect(res.lineas[0]!.cantidadTotal).toBe(2);
+    const alerts = res.advertencias.filter((a) => a.tipo === 'FILA_TACHADA');
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]!.fila).toBe(3);
+    expect(alerts[0]!.cantidadDetectada).toBe(4);
+  });
+
+  it('70. Blindaje 3: lee comentarios legacy (cell.c) y Excel 365 threaded sin boilerplate y los suma al detalle', async () => {
+    const pMulti = CATALOGO_MIBI.find((p) => p.variantes.length >= 2)!;
+    const v1 = pMulti.variantes[0]!;
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet([
+      ['CODIGO', 'DETALLE', 'CANTIDAD', 'PRECIO'],
+      [v1.codigo, pMulti.nombre, 3, pMulti.precioNeto]
+    ]);
+    ws['C2']!.c = [{ a: 'Cliente', t: '3 de Talle 1 por favor' }];
+    XLSX.utils.book_append_sheet(wb, ws, 'Hoja1');
+    const baseBytes = XLSX.write(wb, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer;
+    const zip = await JSZip.loadAsync(baseBytes);
+    const threadedXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+      <ThreadedComments xmlns="http://schemas.microsoft.com/office/spreadsheetml/2018/threadedcomments">
+        <threadedComment ref="A2" dT="2026-01-01T10:00:00.00" personId="{1}" id="{2}">
+          <text>[Threaded comment]
+
+Tu versión de Excel te permite leer comentarios encadenados, pero las ediciones se guardarán aparte.
+Más información: https://go.microsoft.com/fwlink/?linkid=870924
+
+Comentario:
+Mandar sin falta antes del viernes</text>
+        </threadedComment>
+      </ThreadedComments>`;
+    zip.file('xl/threadedComments/threadedComment1.xml', threadedXml);
+    const relsPath = 'xl/worksheets/_rels/sheet1.xml.rels';
+    zip.file(
+      'xl/comments1.xml',
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+      <comments xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+        <authors><author>Cliente</author></authors>
+        <commentList>
+          <comment ref="C2" authorId="0">
+            <text><t>3 de Talle 1 por favor</t></text>
+          </comment>
+        </commentList>
+      </comments>`
+    );
+    zip.file(
+      relsPath,
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+      <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+        <Relationship Id="rId8" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="../comments1.xml"/>
+        <Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2007/relationships/threadedComment" Target="../threadedComments/threadedComment1.xml"/>
+      </Relationships>`
+    );
+
+    const outBuf = await zip.generateAsync({ type: 'arraybuffer' });
+    expect(limpiarTextoComentarioExcel('[Threaded comment]\n\nComentario:\nHola mundo')).toBe('Hola mundo');
+    const estilos = await extraerEstilosYComentariosXlsx(outBuf);
+    expect(estilos.comentariosThreadedPorHoja.get('Hoja1')?.get('1:0')).toBe(
+      'Mandar sin falta antes del viernes'
+    );
+
+    const res = await analizarPlanillaAsync({
+      buffer: outBuf,
+      nombre: 'comentarios.xlsx',
+      catalogo: CATALOGO_EXTENDIDO_MIBI
+    });
+    expect(res.ok).toBe(true);
+    expect(res.comentariosDetectados).toHaveLength(1);
+    expect(res.comentariosDetectados[0]!.texto).toContain('Mandar sin falta antes del viernes');
+    expect(res.comentariosDetectados[0]!.texto).toContain('3 de Talle 1 por favor');
+    expect(res.lineas[0]!.notaCliente).toContain('3 de Talle 1 por favor');
+    expect(res.lineas[0]!.notaCliente).toContain('Mandar sin falta antes del viernes');
+  });
+
+  it('71. Blindaje 4: detecta NOTA_CONTRADICTORIA ante negación/duda o contradicción en Talle Único sin falsos positivos en SURTIDO ni 2 de cada talle', () => {
+    const pUnico = CATALOGO_MIBI.find((p) => p.variantes.length === 1)!;
+    const pMulti = CATALOGO_MIBI.find((p) => p.variantes.length >= 2)!;
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet([
+      ['CODIGO', 'DETALLE', 'CANTIDAD', 'OBS'],
+      [pUnico.variantes[0]!.codigo, pUnico.nombre, 2, 'no mandar si no hay stock'],
+      [pUnico.variantes[0]!.codigo, pUnico.nombre, 5, 'quiero 3 u.'],
+      [pMulti.variantes[0]!.codigo, pMulti.nombre, 4, 'SURTIDO'],
+      [pUnico.variantes[0]!.codigo, pUnico.nombre, 4, '2 de cada talle']
+    ]);
+    XLSX.utils.book_append_sheet(wb, ws, 'Pedido');
+    const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer;
+    const res = parsearExcelLista006(buf, 'contradicciones.xlsx', CATALOGO_EXTENDIDO_MIBI);
+    expect(res.ok).toBe(true);
+    const contra = res.advertencias.filter((a) => a.tipo === 'NOTA_CONTRADICTORIA');
+    expect(contra).toHaveLength(2);
+    expect(contra.map((c) => c.fila).sort()).toEqual([2, 3]);
+    expect(contra.find((c) => c.fila === 3)?.cantidadAlternativa).toBe(3);
+    // Filas 4 ("SURTIDO") y 5 ("2 de cada talle") NO generan falso positivo y suman 8 u.
+    expect(res.lineas.reduce((a, l) => a + l.cantidadTotal, 0)).toBe(8);
+  });
+
+  it('72. Blindaje 5A: detecta ERROR_FORMULA (#REF!, #¡VALOR!, #DIV/0!) en celdas de pedido y pie sin silenciar ni romper', () => {
+    const p1 = CATALOGO_MIBI.find((p) => p.variantes.length === 1)!;
+    const p2 = CATALOGO_MIBI.find((p) => p.variantes.length === 1 && p.idGrupo !== p1.idGrupo)!;
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet([
+      ['CODIGO', 'DETALLE', 'CANTIDAD', 'SUBTOTAL'],
+      [p1.variantes[0]!.codigo, p1.nombre, 2, p1.precioNeto * 2],
+      [p2.variantes[0]!.codigo, p2.nombre, '', 0],
+      ['TOTAL', '', 2, '']
+    ]);
+    ws['C3'] = { t: 'e', v: 0, w: '#REF!' };
+    ws['D4'] = { t: 'e', v: 0, w: '#¡VALOR!' };
+    XLSX.utils.book_append_sheet(wb, ws, 'Pedido');
+    const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer;
+    const res = parsearExcelLista006(buf, 'formula_err.xlsx', CATALOGO_EXTENDIDO_MIBI);
+    expect(res.ok).toBe(true);
+    const errAlerts = res.advertencias.filter((a) => a.tipo === 'ERROR_FORMULA');
+    expect(errAlerts).toHaveLength(1);
+    expect(errAlerts[0]!.fila).toBe(3);
+    expect(res.auditoria.totalDeclaradoArchivo).toBeNull();
+    expect(res.auditoria.motivos.some((m) => m.includes('error de fórmula'))).toBe(true);
+  });
+
+  it('73. Blindaje 5B: detecta DESCUADRE_FILA (qty * precio != subtotal) y audita ecuación completa del pie (Subtotal - Desc + IVA = Total)', () => {
+    const p1 = CATALOGO_MIBI.find((p) => p.variantes.length === 1)!;
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet([
+      ['CODIGO', 'DETALLE', 'CANTIDAD', 'PRECIO', 'SUBTOTAL'],
+      [p1.variantes[0]!.codigo, p1.nombre, 3, 1000, 2000],
+      ['', '', '', 'SUBTOTAL', 2000],
+      ['', '', '', 'IVA 21%', 420],
+      ['', '', '', 'TOTAL FACTURADO', 9999]
+    ]);
+    XLSX.utils.book_append_sheet(wb, ws, 'Pedido');
+    const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer;
+    const res = parsearExcelLista006(buf, 'descuadre_fila.xlsx', CATALOGO_EXTENDIDO_MIBI);
+    expect(res.ok).toBe(true);
+    const rowAlert = res.advertencias.find((a) => a.tipo === 'DESCUADRE_FILA');
+    expect(rowAlert).toBeDefined();
+    expect(rowAlert!.cantidadDetectada).toBe(3);
+    expect(rowAlert!.cantidadAlternativa).toBe(2);
+    expect(res.auditoria.estadoIntegridad).toBe('BLOQUEADO');
+    expect(res.auditoria.motivos.some((m) => /total/i.test(m))).toBe(true);
+  });
+
+  it('74. Blindaje 5C: detecta duplicadosEnArchivo con filas, cantidades y total sumado', () => {
+    const p1 = CATALOGO_MIBI.find((p) => p.variantes.length === 1)!;
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet([
+      ['CODIGO', 'DETALLE', 'CANTIDAD'],
+      [p1.variantes[0]!.codigo, p1.nombre, 2],
+      [p1.variantes[0]!.codigo, p1.nombre, 3]
+    ]);
+    XLSX.utils.book_append_sheet(wb, ws, 'Pedido');
+    const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer;
+    const res = parsearExcelLista006(buf, 'duplicados.xlsx', CATALOGO_EXTENDIDO_MIBI);
+    expect(res.ok).toBe(true);
+    expect(res.lineas).toHaveLength(1);
+    expect(res.lineas[0]!.cantidadTotal).toBe(5);
+    expect(res.auditoria.duplicadosEnArchivo).toHaveLength(1);
+    expect(res.auditoria.duplicadosEnArchivo[0]!.apariciones.map((a) => a.fila)).toEqual([2, 3]);
+    expect(res.auditoria.duplicadosEnArchivo[0]!.apariciones.map((a) => a.cantidad)).toEqual([2, 3]);
+    expect(res.auditoria.duplicadosEnArchivo[0]!.cantidadTotalSumada).toBe(5);
+  });
+
+  it('75. Blindaje 6A: bloquea Nota de Crédito / Débito / Recibo AFIP como COMPROBANTE_NO_PEDIDO', () => {
+    const ncPage: PaginaPdf[] = [
+      {
+        numero: 1,
+        filas: [
+          { y: 780, celdas: [{ x: 250, texto: 'NOTA DE CREDITO' }, { x: 420, texto: 'CUIT: 27310986599' }] },
+          { y: 740, celdas: [{ x: 50, texto: 'ORIGINAL' }] },
+          { y: 700, celdas: [{ x: 50, texto: 'Razón Social: CLIENTE TEST SRL' }] },
+          { y: 680, celdas: [{ x: 50, texto: 'CUIT: 30716778556' }] },
+          { y: 640, celdas: [{ x: 35, texto: '6542' }, { x: 100, texto: 'Devolución' }, { x: 265, texto: '1,00' }] },
+          { y: 200, celdas: [{ x: 400, texto: 'Importe Total: $ 1210,00' }] }
+        ]
+      }
+    ];
+    const res = parsearFacturaAfipDesdePaginas(ncPage, {
+      fileName: 'nc_0001.pdf',
+      catalogoPorCodigo: CATALOGO_EXTENDIDO_BY_CODIGO,
+      catalogoUnificado: CATALOGO_EXTENDIDO_MIBI
+    });
+    expect(res.ok).toBe(false);
+    expect(res.tipoArchivo).toBe('COMPROBANTE_NO_PEDIDO');
+    expect(res.auditoria.estadoIntegridad).toBe('BLOQUEADO');
+  });
+
+  it('76. Blindaje 6B: bloquea PDF AFIP emitido por otro CUIT distinto de Mibi (27310986599)', () => {
+    const ajenaPage: PaginaPdf[] = [
+      {
+        numero: 1,
+        filas: [
+          { y: 800, celdas: [{ x: 250, texto: 'ORIGINAL' }] },
+          { y: 780, celdas: [{ x: 400, texto: 'CUIT: 30-71677855-6' }] },
+          { y: 750, celdas: [{ x: 400, texto: 'Punto de Venta: 00001 Comp. Nro: 00000123' }] },
+          { y: 710, celdas: [{ x: 50, texto: 'Razón Social: PROVEEDOR AJENO SA' }, { x: 400, texto: 'CUIT: 33-71645291-9' }] },
+          { y: 650, celdas: [{ x: 35, texto: '6542' }, { x: 100, texto: 'Producto' }, { x: 265, texto: '1,00' }] },
+          { y: 200, celdas: [{ x: 400, texto: 'Importe Total: $ 1000,00' }] }
+        ]
+      }
+    ];
+    const res = parsearFacturaAfipDesdePaginas(ajenaPage, {
+      fileName: 'factura_ajena.pdf',
+      catalogoPorCodigo: CATALOGO_EXTENDIDO_BY_CODIGO,
+      catalogoUnificado: CATALOGO_EXTENDIDO_MIBI
+    });
+    expect(res.ok).toBe(false);
+    expect(res.tipoArchivo).toBe('COMPROBANTE_NO_PEDIDO');
+    expect(res.errorFatal).toContain('30-71677855-6');
+  });
+
+  it('77. Blindaje 6C: soporta Factura B (COD. 006), Otros Tributos (percepciones) y alertas por ítem negativo en AFIP', () => {
+    const p1 = CATALOGO_MIBI[0]!;
+    const cod = p1.variantes[0]!.codigo;
+    // Subtotal con IVA incluido = 1210 -> neto 1000 + otros tributos 50 = total 1260
+    const facBPage: PaginaPdf[] = [
+      {
+        numero: 1,
+        filas: [
+          { y: 800, celdas: [{ x: 270, texto: 'B' }, { x: 260, texto: 'COD. 006' }] },
+          { y: 780, celdas: [{ x: 250, texto: 'ORIGINAL' }, { x: 400, texto: 'CUIT: 27310986599' }] },
+          { y: 750, celdas: [{ x: 400, texto: 'Punto de Venta: 00009 Comp. Nro: 00000088' }] },
+          { y: 710, celdas: [{ x: 50, texto: 'Razón Social: CONSUMIDOR TEST' }, { x: 400, texto: 'CUIT: 20334455667' }] },
+          {
+            y: 680,
+            celdas: [
+              { x: 19, texto: 'Código' },
+              { x: 59, texto: 'Producto / Servicio' },
+              { x: 239, texto: 'Cantidad' },
+              { x: 286, texto: 'U. medida' },
+              { x: 335, texto: 'Precio Unit.' },
+              { x: 388, texto: '% Bonif' },
+              { x: 435, texto: 'Subtotal' },
+              { x: 524, texto: 'Subtotal c/IVA' }
+            ]
+          },
+          {
+            y: 650,
+            celdas: [
+              { x: 35, texto: cod },
+              { x: 100, texto: p1.nombre },
+              { x: 265, texto: '2,00' },
+              { x: 288, texto: 'unidades' },
+              { x: 352, texto: '605,00' },
+              { x: 398, texto: '0,00' },
+              { x: 441, texto: '1210,00' },
+              { x: 490, texto: '21%' },
+              { x: 541, texto: '1210,00' }
+            ]
+          },
+          {
+            y: 620,
+            celdas: [
+              { x: 35, texto: cod },
+              { x: 100, texto: 'Bonificación descuento' },
+              { x: 265, texto: '-1,00' },
+              { x: 288, texto: 'unidades' },
+              { x: 352, texto: '100,00' },
+              { x: 398, texto: '0,00' },
+              { x: 441, texto: '-100,00' },
+              { x: 490, texto: '21%' },
+              { x: 541, texto: '-100,00' }
+            ]
+          },
+          { y: 280, celdas: [{ x: 398, texto: 'Subtotal: $' }, { x: 520, texto: '1210,00' }] },
+          { y: 240, celdas: [{ x: 398, texto: 'Importe Otros Tributos: $' }, { x: 520, texto: '50,00' }] },
+          { y: 180, celdas: [{ x: 428, texto: 'Importe Total: $' }, { x: 520, texto: '1260,00' }] }
+        ]
+      }
+    ];
+    const res = parsearFacturaAfipDesdePaginas(facBPage, {
+      fileName: 'factura_b.pdf',
+      catalogoPorCodigo: CATALOGO_EXTENDIDO_BY_CODIGO,
+      catalogoUnificado: CATALOGO_EXTENDIDO_MIBI
+    });
+    expect(res.ok).toBe(true);
+    expect(res.auditoria.unidadesLeidas).toBe(2);
+    expect(res.advertencias.some((a) => a.tipo === 'CANTIDAD_INVALIDA')).toBe(true);
+    expect(res.avisos.some((av) => av.includes('percepciones') || av.includes('Otros Tributos'))).toBe(true);
+  });
+
+  it('78. Blindaje 7: analizarDocx lee word/header1.xml y expande celdas combinadas (gridSpan / vMerge)', async () => {
+    const zip = new JSZip();
+    zip.file(
+      'word/header1.xml',
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+       <w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+         <w:p><w:r><w:t>ALTA DE CLIENTES · CUIT 30-71122334-9</w:t></w:r></w:p>
+       </w:hdr>`
+    );
+    zip.file(
+      'word/document.xml',
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+       <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+         <w:body>
+           <w:tbl>
+             <w:tr>
+               <w:tc><w:tcPr><w:gridSpan w:val="2"/></w:tcPr><w:p><w:r><w:t>Razón Social</w:t></w:r></w:p></w:tc>
+               <w:tc><w:p><w:r><w:t>KIDS POINT COMBINADO SA</w:t></w:r></w:p></w:tc>
+             </w:tr>
+             <w:tr>
+               <w:tc><w:tcPr><w:vMerge w:val="restart"/></w:tcPr><w:p><w:r><w:t>Teléfono de contacto</w:t></w:r></w:p></w:tc>
+               <w:tc><w:p><w:r><w:t>11-5544-3322</w:t></w:r></w:p></w:tc>
+             </w:tr>
+             <w:tr>
+               <w:tc><w:tcPr><w:vMerge/></w:tcPr><w:p><w:r><w:t></w:t></w:r></w:p></w:tc>
+               <w:tc><w:p><w:r><w:t>Transporte Andreani</w:t></w:r></w:p></w:tc>
+             </w:tr>
+           </w:tbl>
+         </w:body>
+       </w:document>`
+    );
+    const bytes = new Uint8Array(await zip.generateAsync({ type: 'uint8array' }));
+    const res = await analizarDocx(bytes, {
+      fileName: 'combinado.docx',
+      catalogoPorCodigo: CATALOGO_EXTENDIDO_BY_CODIGO,
+      catalogoUnificado: CATALOGO_EXTENDIDO_MIBI
+    });
+    expect(res.ok).toBe(true);
+    expect(res.tipoArchivo).toBe('ALTA_CLIENTE_DOCX');
+    expect(res.datosDetectados?.cuit).toBe('30711223349');
+    expect(res.datosDetectados?.cliente).toBe('KIDS POINT COMBINADO SA');
+    expect(res.datosDetectados?.whatsapp).toBe('11-5544-3322');
+  });
+
+  it('79. Seguridad anti zip-bomb: rechaza XML interno mayor al tope seguro sin romper el flujo', async () => {
+    const zip = new JSZip();
+    const bigPayload = 'A'.repeat(MAX_XML_UNCOMPRESSED_BYTES + 1024);
+    zip.file('xl/styles.xml', `<root>${bigPayload}</root>`);
+    const bytes = await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' });
+    const loaded = await JSZip.loadAsync(bytes);
+    await expect(leerArchivoZipTextoSeguro(loaded, 'xl/styles.xml')).rejects.toThrow(
+      /estructura interna demasiado grande/i
+    );
   });
 });

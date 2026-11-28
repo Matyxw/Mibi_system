@@ -48,6 +48,7 @@ export interface SheetJSCellObject {
   t?: string;
   z?: string;
   w?: string;
+  c?: Array<{ a?: string; t?: string }>;
 }
 
 export interface SheetJSMergeRange {
@@ -56,9 +57,16 @@ export interface SheetJSMergeRange {
 }
 
 export interface SheetJSWorkSheet {
-  [address: string]: SheetJSCellObject | SheetJSMergeRange[] | { wch?: number }[] | string | undefined;
+  [address: string]:
+    | SheetJSCellObject
+    | SheetJSMergeRange[]
+    | { wch?: number }[]
+    | Array<{ hidden?: boolean } | undefined>
+    | string
+    | undefined;
   '!merges'?: SheetJSMergeRange[];
   '!cols'?: { wch?: number }[];
+  '!rows'?: Array<{ hidden?: boolean } | undefined>;
   '!ref'?: string;
 }
 
@@ -203,7 +211,15 @@ export interface ResumenFinanciero {
   faltaPago: number;
 }
 
-export type TipoAdvertenciaExcel = 'CODIGO_DESCONOCIDO' | 'CANTIDAD_INVALIDA' | 'FILA_SIN_CODIGO';
+export type TipoAdvertenciaExcel =
+  | 'CODIGO_DESCONOCIDO'
+  | 'CANTIDAD_INVALIDA'
+  | 'FILA_SIN_CODIGO'
+  | 'FILA_OCULTA'
+  | 'FILA_TACHADA'
+  | 'NOTA_CONTRADICTORIA'
+  | 'ERROR_FORMULA'
+  | 'DESCUADRE_FILA';
 
 export type TipoArchivoDetectado =
   | 'LISTA_006'
@@ -215,9 +231,30 @@ export type TipoArchivoDetectado =
   | 'PEDIDO_DOCX'
   | 'IMAGEN_O_PDF_ESCANEADO'
   | 'PLANILLA_GENERAL_ADMIN'
+  | 'COMPROBANTE_NO_PEDIDO'
   | 'NO_COMPATIBLE';
 
 export type EstadoIntegridad = 'EXACTO' | 'REVISAR' | 'BLOQUEADO';
+
+export interface ComentarioCeldaExcel {
+  id: string;
+  hoja: string;
+  fila: number;
+  columna: number;
+  celdaRef: string;
+  codigo: string;
+  productoNombre: string;
+  texto: string;
+  aplicadoComoNota: boolean;
+}
+
+export interface DuplicadoEnArchivo {
+  codigo: string;
+  nombreProducto: string;
+  idGrupo: string;
+  apariciones: ReadonlyArray<{ fila: number; cantidad: number }>;
+  cantidadTotalSumada: number;
+}
 
 export interface AuditoriaLectura {
   unidadesLeidas: number;
@@ -230,6 +267,11 @@ export interface AuditoriaLectura {
   filasOmitidasConDatos: number;
   estadoIntegridad: EstadoIntegridad;
   motivos: string[];
+  descuentoDeclaradoPorc?: number | null;
+  descuentoDeclaradoMonto?: number | null;
+  ivaDeclaradoArchivo?: number | null;
+  totalFacturadoDeclaradoArchivo?: number | null;
+  duplicadosEnArchivo: ReadonlyArray<DuplicadoEnArchivo>;
 }
 
 export interface CorreccionAutomatica {
@@ -299,6 +341,7 @@ export interface AdvertenciaExcel {
   cantidadRaw: string;
   notaDetectada: string;
   productoExistenteIdGrupo: string | null;
+  cantidadAlternativa?: number | null;
   sugerenciasCatalogo: ReadonlyArray<SugerenciaProductoCatalogo>;
 }
 
@@ -313,6 +356,7 @@ export interface ResultadoParseoLista006 {
   correccionesAutomaticas: ReadonlyArray<CorreccionAutomatica>;
   hojasDisponibles: ReadonlyArray<HojaDisponible>;
   datosDetectados: DatosClienteDetectados | null;
+  comentariosDetectados: ReadonlyArray<ComentarioCeldaExcel>;
 }
 
 export interface ResultadoAnalisisArchivo extends ResultadoParseoLista006 {
@@ -337,6 +381,9 @@ export interface ControlImportacionBorrador {
   descuadreConfirmado: boolean;
   correcciones: ReadonlyArray<CorreccionAutomatica>;
   correccionesRevisadas: boolean;
+  duplicados: ReadonlyArray<DuplicadoEnArchivo>;
+  duplicadosConfirmados: boolean;
+  comentarios: ReadonlyArray<ComentarioCeldaExcel>;
   hojasDisponibles: ReadonlyArray<HojaDisponible>;
   camposAutocompletados: CampoAutocompletadoImport[];
   requiereConfirmacionHumana: boolean;

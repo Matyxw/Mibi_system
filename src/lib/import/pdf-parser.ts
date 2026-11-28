@@ -21,7 +21,12 @@ import type {
   ProductoCatalogo,
   ResultadoAnalisisArchivo
 } from '@/lib/types';
-import { normalizarCuit, parsearNumeroDocumento, validarCuit } from './numeros';
+import {
+  normalizarCuit,
+  parsearNumeroDocumento,
+  validarCuit,
+  formatearCuit
+} from './numeros';
 
 export interface CeldaPdf {
   x: number;
@@ -96,7 +101,10 @@ export const clasificarPdf = (
   );
 
   if (
-    muestra.includes('factura') &&
+    (muestra.includes('factura') ||
+      muestra.includes('nota de credito') ||
+      muestra.includes('nota de debito') ||
+      muestra.includes('recibo')) &&
     (muestra.includes('comp. nro') || muestra.includes('cae')) &&
     (muestra.includes('importe total') || muestra.includes('importe neto gravado'))
   ) {
@@ -194,7 +202,12 @@ export const parsearFacturaAfipDesdePaginas = (
   }
 ): ResultadoAnalisisArchivo => {
   const paginas = seleccionarPaginasOriginal(paginasInput);
-  const emisorCuit = '27310986599';
+  const cuitEmisorEsperado =
+    (typeof process !== 'undefined' ? process.env.MIBI_CUIT_EMISOR?.replace(/\D/g, '') : '') ||
+    '27310986599';
+
+  let tipoDocNoPedido: 'NOTA_CREDITO' | 'NOTA_DEBITO' | 'RECIBO' | null = null;
+  let cuitEmisorDetectado = '';
 
   let cliente = '';
   let cuit = '';
@@ -208,9 +221,11 @@ export const parsearFacturaAfipDesdePaginas = (
   let iva21Declarado: number | null = null;
   let ivaOtrosSuma = 0;
   let otrosTributosDeclarado = 0;
+  let noGravadoDeclarado = 0;
   let totalFacturaDeclarado: number | null = null;
 
   const items: ItemFacturaPdfRaw[] = [];
+  const itemsNegativos: ItemFacturaPdfRaw[] = [];
   const avisos: string[] = [];
 
   for (let pIdx = 0; pIdx < paginas.length; pIdx++) {
@@ -263,7 +278,7 @@ export const parsearFacturaAfipDesdePaginas = (
           colHeaders = detected;
         }
       }
-      if (f.celdas.some((c) => /^Importe (?:Neto Gravado|Otros Tributos|Total):/i.test(c.texto))) {
+      if (f.celdas.some((c) => /^Importe (?:Neto Gravado|Neto No Gravado|Op\. Exentas|Otros Tributos|Total):/i.test(c.texto))) {
         itemsBottomY = Math.max(itemsBottomY, f.y + 5);
       }
     }
@@ -288,15 +303,51 @@ export const parsearFacturaAfipDesdePaginas = (
       const textos = fila.celdas.map((c) => c.texto);
       const filaNorm = normalizarTexto(textos.join(' '));
 
-      // Letra y código AFIP
-      if (fila.y > 740) {
+      // Bloque superior: tipo de comprobante, COD. XXX y CUIT emisor
+      if (fila.y > 670) {
+        if (/nota\s+de\s+credito/i.test(filaNorm)) tipoDocNoPedido = 'NOTA_CREDITO';
+        else if (/nota\s+de\s+debito/i.test(filaNorm)) tipoDocNoPedido = 'NOTA_DEBITO';
+        else if (fila.y > 740 && /\brecibo\b/i.test(filaNorm)) tipoDocNoPedido = 'RECIBO';
+
         for (const c of fila.celdas) {
           if (c.x >= 260 && c.x <= 320 && /^[ABC]$/.test(c.texto)) {
             tipoComprobante = `Factura ${c.texto}`;
           }
-          if (/COD\.\s*01/i.test(c.texto)) tipoComprobante = 'Factura A';
-          else if (/COD\.\s*06/i.test(c.texto)) tipoComprobante = 'Factura B';
-          else if (/COD\.\s*11/i.test(c.texto)) tipoComprobante = 'Factura C';
+          if (/COD\.\s*0*(?:03|08|13)\b/i.test(c.texto)) tipoDocNoPedido = 'NOTA_CREDITO';
+          else if (/COD\.\s*0*(?:02|07|12)\b/i.test(c.texto)) tipoDocNoPedido = 'NOTA_DEBITO';
+          else if (/COD\.\s*0*1\b/i.test(c.texto)) tipoComprobante = 'Factura A';
+          else if (/COD\.\s*0*6\b/i.test(c.texto)) tipoComprobante = 'Factura B';
+          else if (/COD\.\s*11\b/i.test(c.texto)) tipoComprobante = 'Factura C';
+        }
+
+        const esReceptorRow = fila.celdas.some((c) =>
+          /apellido y nombre|raz[óo]n social/i.test(c.texto) && c.x > 180
+        );
+        if (!cuitEmisorDetectado && fila.y > 675 && !esReceptorRow) {
+          for (const c of fila.celdas) {
+            const inlineMatch = c.texto.match(/c\.?u\.?i\.?t\.?\s*:?\s*(\d{2}-?\d{8}-?\d)/i);
+            if (inlineMatch?.[1]) {
+              const d = normalizarCuit(inlineMatch[1]);
+              if (validarCuit(d)) {
+                cuitEmisorDetectado = d;
+                break;
+              }
+            }
+          }
+          if (!cuitEmisorDetectado) {
+            const cuitLabel = fila.celdas.find((c) => /^c\.?u\.?i\.?t\.?:?$/i.test(c.texto.trim()));
+            if (cuitLabel) {
+              const cuitEmCell = fila.celdas.find((c) => {
+                if (c.x <= cuitLabel.x) return false;
+                const d = normalizarCuit(c.texto);
+                return d.length === 11;
+              });
+              if (cuitEmCell) {
+                const d = normalizarCuit(cuitEmCell.texto);
+                if (validarCuit(d)) cuitEmisorDetectado = d;
+              }
+            }
+          }
         }
       }
 
@@ -329,7 +380,7 @@ export const parsearFacturaAfipDesdePaginas = (
         }
         const cuitCell = fila.celdas.find((c) => {
           const d = normalizarCuit(c.texto);
-          return d.length === 11 && d !== emisorCuit;
+          return d.length === 11 && d !== cuitEmisorEsperado;
         });
         if (cuitCell && !cuit) {
           const d = normalizarCuit(cuitCell.texto);
@@ -364,7 +415,12 @@ export const parsearFacturaAfipDesdePaginas = (
         if (val > 0) netoDeclarado = val;
         continue;
       }
-      if (fila.celdas.some((c) => /^Subtotal:\s*\$/i.test(c.texto)) && tieneImporteTotalEnPagina) {
+      if (fila.celdas.some((c) => /^Importe Neto No Gravado:|^Importe Op\. Exentas:/i.test(c.texto))) {
+        const val = parsearNumeroDocumento(fila.celdas[fila.celdas.length - 1]?.texto);
+        if (val > 0) noGravadoDeclarado = round2(noGravadoDeclarado + val);
+        continue;
+      }
+      if (fila.celdas.some((c) => /^Subtotal:\s*\$?/i.test(c.texto)) && tieneImporteTotalEnPagina) {
         const val = parsearNumeroDocumento(fila.celdas[fila.celdas.length - 1]?.texto);
         if (val > 0) subtotalFacturaB = val;
         continue;
@@ -418,30 +474,79 @@ export const parsearFacturaAfipDesdePaginas = (
           }
         }
 
-        if (cantidad > 0) {
-          items.push({
-            pagina: pag.numero,
-            fila: rIdx + 1,
-            codigo,
-            descripcion: limpiarTextoInvisible(descParts.join(' ')),
-            cantidad,
-            precioUnitario,
-            bonifPorc,
-            subtotal
-          });
+        const itemObj: ItemFacturaPdfRaw = {
+          pagina: pag.numero,
+          fila: rIdx + 1,
+          codigo,
+          descripcion: limpiarTextoInvisible(descParts.join(' ')),
+          cantidad,
+          precioUnitario,
+          bonifPorc,
+          subtotal
+        };
+        if (cantidad > 0 && subtotal >= 0) {
+          items.push(itemObj);
+        } else {
+          itemsNegativos.push(itemObj);
         }
       } else if (
         items.length > 0 &&
         !/^(?:alicuota|iva|pag\.|cae|comprobante|esta agencia)/i.test(filaNorm) &&
         fila.celdas.every((c) => assignCol(c.x) === 'producto')
       ) {
-        // Descripción multilínea pegada al ítem anterior
         const prev = items[items.length - 1]!;
         if (prev.pagina === pag.numero) {
           prev.descripcion = limpiarTextoInvisible(`${prev.descripcion} ${textos.join(' ')}`);
         }
       }
     }
+  }
+
+  // Bloqueos duros de cumplimiento AFIP / ARCA
+  if (tipoDocNoPedido) {
+    const msgMap: Record<typeof tipoDocNoPedido, string> = {
+      NOTA_CREDITO:
+        'Este archivo es una Nota de Crédito AFIP (devolución o anulación), no un pedido de compra.',
+      NOTA_DEBITO: 'Este archivo es una Nota de Débito AFIP, no un pedido de compra.',
+      RECIBO: 'Este archivo es un Recibo AFIP, no un pedido de compra.'
+    };
+    return {
+      ok: false,
+      errorFatal: msgMap[tipoDocNoPedido],
+      lineas: [],
+      advertencias: [],
+      avisosPrecio: [],
+      tipoArchivo: 'COMPROBANTE_NO_PEDIDO',
+      auditoria: auditoriaVacia('BLOQUEADO'),
+      correccionesAutomaticas: [],
+      hojasDisponibles: [],
+      datosDetectados: null,
+      comentariosDetectados: [],
+      nombreArchivo: ctx.fileName,
+      avisos: [],
+      visionDisponible: false,
+      requiereConfirmacionHumana: false
+    };
+  }
+
+  if (cuitEmisorDetectado && cuitEmisorDetectado !== cuitEmisorEsperado) {
+    return {
+      ok: false,
+      errorFatal: `Esta factura AFIP fue emitida por CUIT ${formatearCuit(cuitEmisorDetectado)} y no corresponde a Mibi®.`,
+      lineas: [],
+      advertencias: [],
+      avisosPrecio: [],
+      tipoArchivo: 'COMPROBANTE_NO_PEDIDO',
+      auditoria: auditoriaVacia('BLOQUEADO'),
+      correccionesAutomaticas: [],
+      hojasDisponibles: [],
+      datosDetectados: null,
+      comentariosDetectados: [],
+      nombreArchivo: ctx.fileName,
+      avisos: [],
+      visionDisponible: false,
+      requiereConfirmacionHumana: false
+    };
   }
 
   // Resolver ítems al catálogo unificado agrupando variantes del mismo grupo
@@ -451,6 +556,29 @@ export const parsearFacturaAfipDesdePaginas = (
   const correcciones: CorreccionAutomatica[] = [];
   const bonificacionesUsadas = new Set<number>();
   let filasOmitidasConDatos = 0;
+
+  for (const neg of itemsNegativos) {
+    filasOmitidasConDatos += 1;
+    advertencias.push({
+      hoja: `Pág. ${neg.pagina}`,
+      fila: neg.fila,
+      codigo: neg.codigo,
+      mensaje: `Fila con cantidad o subtotal negativo/inválido en factura (${neg.cantidad} u. · $${neg.subtotal}).`,
+      id: `Pág. ${neg.pagina}#${neg.fila}#${neg.codigo || 'NEG'}#CANTIDAD_INVALIDA`,
+      tipo: 'CANTIDAD_INVALIDA',
+      codigosDetectados: neg.codigo ? [neg.codigo] : [],
+      descripcionExcel: neg.descripcion,
+      precioExcelReferencia: neg.precioUnitario !== 0 ? Math.abs(neg.precioUnitario) : null,
+      cantidadDetectada: null,
+      cantidadRaw: String(neg.cantidad),
+      notaDetectada: neg.descripcion,
+      productoExistenteIdGrupo: neg.codigo ? (ctx.catalogoPorCodigo.get(neg.codigo)?.idGrupo ?? null) : null,
+      sugerenciasCatalogo: []
+    });
+  }
+
+  const esFacturaB = tipoComprobante === 'Factura B';
+  const esFacturaC = tipoComprobante === 'Factura C';
 
   for (const it of items) {
     bonificacionesUsadas.add(round2(it.bonifPorc));
@@ -519,15 +647,19 @@ export const parsearFacturaAfipDesdePaginas = (
       continue;
     }
 
+    const precioUnitarioNetoFactura = esFacturaB
+      ? round2(it.precioUnitario / 1.21)
+      : it.precioUnitario;
+
     if (
-      it.precioUnitario > 0 &&
-      Math.abs(it.precioUnitario - prod.precioNeto) > 1 &&
+      precioUnitarioNetoFactura > 0 &&
+      Math.abs(precioUnitarioNetoFactura - prod.precioNeto) > 1.5 &&
       !avisosPrecioMap.has(codigoEfectivo)
     ) {
       avisosPrecioMap.set(codigoEfectivo, {
         codigo: codigoEfectivo,
         nombreProducto: prod.nombre,
-        precioPlanilla: it.precioUnitario,
+        precioPlanilla: precioUnitarioNetoFactura,
         precioVigente: prod.precioNeto
       });
     }
@@ -564,7 +696,12 @@ export const parsearFacturaAfipDesdePaginas = (
   const diferenciaUnidades = unidadesLeidas - unidadesDeclaradasArchivo;
 
   const subtotalNetoCalculado = round2(items.reduce((s, it) => s + it.subtotal, 0));
-  const totalDeclaradoArchivo = netoDeclarado ?? subtotalFacturaB ?? null;
+  const totalDeclaradoArchivo =
+    esFacturaB
+      ? subtotalFacturaB ?? totalFacturaDeclarado ?? null
+      : esFacturaC
+        ? netoDeclarado ?? subtotalFacturaB ?? totalFacturaDeclarado ?? null
+        : netoDeclarado ?? subtotalFacturaB ?? null;
   const diferenciaImporte =
     totalDeclaradoArchivo !== null ? round2(subtotalNetoCalculado - totalDeclaradoArchivo) : null;
 
@@ -580,21 +717,50 @@ export const parsearFacturaAfipDesdePaginas = (
   if (diferenciaImporte !== null && Math.abs(diferenciaImporte) > 1) {
     estadoIntegridad = 'BLOQUEADO';
     motivos.push(
-      `El subtotal de ítems ($${subtotalNetoCalculado.toFixed(2)}) no coincide con el Neto Gravado de la factura ($${totalDeclaradoArchivo?.toFixed(2)}).`
+      `El subtotal de ítems ($${subtotalNetoCalculado.toFixed(2)}) no coincide con el ${esFacturaB ? 'Subtotal' : 'Neto Gravado'} de la factura ($${totalDeclaradoArchivo?.toFixed(2)}).`
     );
   }
-  if (
+
+  if (esFacturaB && totalFacturaDeclarado !== null) {
+    const baseB = subtotalFacturaB ?? subtotalNetoCalculado;
+    const esperadoB = round2(baseB + otrosTributosDeclarado);
+    if (Math.abs(esperadoB - totalFacturaDeclarado) > 1) {
+      estadoIntegridad = 'BLOQUEADO';
+      motivos.push(
+        `El total impreso en Factura B ($${totalFacturaDeclarado.toFixed(2)}) no coincide con Subtotal + Otros Tributos ($${esperadoB.toFixed(2)}).`
+      );
+    }
+  } else if (esFacturaC && totalFacturaDeclarado !== null) {
+    const esperadoC = round2(subtotalNetoCalculado + otrosTributosDeclarado);
+    if (Math.abs(esperadoC - totalFacturaDeclarado) > 1) {
+      estadoIntegridad = 'BLOQUEADO';
+      motivos.push(
+        `El total impreso en Factura C ($${totalFacturaDeclarado.toFixed(2)}) no coincide con la suma de ítems ($${esperadoC.toFixed(2)}).`
+      );
+    }
+  } else if (
     totalFacturaDeclarado !== null &&
     netoDeclarado !== null &&
     iva21Declarado !== null
   ) {
-    const esperadoConIva = round2(netoDeclarado + iva21Declarado + ivaOtrosSuma + otrosTributosDeclarado);
+    const esperadoConIva = round2(
+      netoDeclarado + iva21Declarado + ivaOtrosSuma + otrosTributosDeclarado + noGravadoDeclarado
+    );
     if (Math.abs(esperadoConIva - totalFacturaDeclarado) > 1) {
       estadoIntegridad = 'BLOQUEADO';
       motivos.push(
-        `El total impreso en la factura ($${totalFacturaDeclarado.toFixed(2)}) no coincide con Neto + IVA ($${esperadoConIva.toFixed(2)}).`
+        `El total impreso en la factura ($${totalFacturaDeclarado.toFixed(2)}) no coincide con Neto + IVA + Otros Tributos ($${esperadoConIva.toFixed(2)}).`
       );
     }
+  }
+
+  if (otrosTributosDeclarado > 0) {
+    avisos.push(
+      `La factura incluye $${otrosTributosDeclarado.toFixed(2)} en percepciones / otros tributos.`
+    );
+  }
+  if (esFacturaC) {
+    avisos.push('Comprobante Factura C detectado.');
   }
 
   let descuentoPorc: number | undefined;
@@ -616,7 +782,12 @@ export const parsearFacturaAfipDesdePaginas = (
     }
   }
 
-  const refFactura = numeroComprobante ? `Factura AFIP ${numeroComprobante}` : 'Factura AFIP';
+  const refFactura = numeroComprobante ? `${tipoComprobante} AFIP ${numeroComprobante}` : 'Factura AFIP';
+  const obsSugerida =
+    otrosTributosDeclarado > 0
+      ? `${refFactura} · Percepciones: $${otrosTributosDeclarado.toFixed(2)}`
+      : refFactura;
+
   const datosDetectados: DatosClienteDetectados = {
     ...(cliente ? { cliente } : {}),
     ...(cuit ? { cuit } : {}),
@@ -625,7 +796,7 @@ export const parsearFacturaAfipDesdePaginas = (
     tipoComprobante,
     ...(fechaPedido ? { fechaPedido } : {}),
     ...(descuentoPorc !== undefined ? { descuentoPorc } : {}),
-    observacionesSugeridas: cuit ? `${refFactura} · CUIT: ${cuit}` : refFactura,
+    observacionesSugeridas: cuit ? `${obsSugerida} · CUIT: ${cuit}` : obsSugerida,
     origen: 'FACTURA'
   };
 
@@ -645,11 +816,15 @@ export const parsearFacturaAfipDesdePaginas = (
       diferenciaImporte,
       filasOmitidasConDatos,
       estadoIntegridad,
-      motivos
+      motivos,
+      ivaDeclaradoArchivo: iva21Declarado,
+      totalFacturadoDeclaradoArchivo: totalFacturaDeclarado,
+      duplicadosEnArchivo: []
     },
     correccionesAutomaticas: correcciones,
     hojasDisponibles: [],
     datosDetectados,
+    comentariosDetectados: [],
     nombreArchivo: ctx.fileName,
     avisos,
     visionDisponible: false,
@@ -826,6 +1001,7 @@ export const parsearPedidoPdfDesdePaginas = (
     correccionesAutomaticas: tab.correcciones,
     hojasDisponibles: [],
     datosDetectados: null,
+    comentariosDetectados: tab.comentariosDetectados,
     nombreArchivo: ctx.fileName,
     avisos: [],
     visionDisponible: false,
@@ -856,6 +1032,7 @@ export const analizarPdf = async (
       correccionesAutomaticas: [],
       hojasDisponibles: [],
       datosDetectados: null,
+      comentariosDetectados: [],
       nombreArchivo: ctx.fileName,
       avisos: [],
       visionDisponible: false,
@@ -877,6 +1054,7 @@ export const analizarPdf = async (
       correccionesAutomaticas: [],
       hojasDisponibles: [],
       datosDetectados: null,
+      comentariosDetectados: [],
       nombreArchivo: ctx.fileName,
       avisos: ['Guardamos este PDF como referencia: podés verlo al lado mientras cargás el pedido.'],
       visionDisponible: false,
@@ -902,6 +1080,7 @@ export const analizarPdf = async (
     correccionesAutomaticas: [],
     hojasDisponibles: [],
     datosDetectados: null,
+    comentariosDetectados: [],
     nombreArchivo: ctx.fileName,
     avisos: [],
     visionDisponible: false,

@@ -14,6 +14,7 @@ import type {
   ResultadoAnalisisArchivo
 } from '@/lib/types';
 import { normalizarCuit, validarCuit } from './numeros';
+import { leerArchivoZipTextoSeguro } from './xlsx-estilos';
 
 export type BloqueDocx =
   | { tipo: 'PARRAFO'; texto: string }
@@ -38,34 +39,58 @@ const extractParagraphText = (xmlSegment: string): string => {
   return limpiarTextoInvisible(parts.join(''));
 };
 
-export const extraerContenidoDocx = async (bytes: Uint8Array): Promise<BloqueDocx[]> => {
-  const zip = await JSZip.loadAsync(bytes);
-  const docFile =
-    zip.file('word/document.xml') ??
-    Object.values(zip.files).find((f) => f.name.toLowerCase() === 'word/document.xml');
-  if (!docFile) return [];
-
-  const xml = await docFile.async('string');
-  const bloques: BloqueDocx[] = [];
-
+const parsearBloquesXml = (xml: string, bloques: BloqueDocx[]): void => {
   for (const m of xml.matchAll(/<w:tbl\b[\s\S]*?<\/w:tbl>|<w:p(?:\s+[^>]*)?>[\s\S]*?<\/w:p>/g)) {
     const seg = m[0];
     if (seg.startsWith('<w:tbl')) {
       const filas: string[][] = [];
+      const vMergeCols = new Map<number, string>();
+
       for (const rm of seg.matchAll(/<w:tr\b[\s\S]*?<\/w:tr>/g)) {
-        const celdas: string[] = [];
+        const celdasExpandidas: string[] = [];
+        let colIdx = 0;
+
         for (const cm of rm[0].matchAll(/<w:tc\b[\s\S]*?<\/w:tc>/g)) {
+          const cellXml = cm[0];
+          const tcPr = cellXml.match(/<w:tcPr\b[^>]*>([\s\S]*?)<\/w:tcPr>/i)?.[1] ?? '';
+
+          const gridSpanRaw = tcPr.match(/<w:gridSpan\b[^>]*w:val="(\d+)"/i)?.[1];
+          const gridSpan = gridSpanRaw ? Math.max(1, parseInt(gridSpanRaw, 10)) : 1;
+
+          const vMergeMatch = tcPr.match(/<w:vMerge\b([^>]*)\/?>/i);
+          let vMergeMode: 'none' | 'restart' | 'continue' = 'none';
+          if (vMergeMatch) {
+            const vVal = vMergeMatch[1]?.match(/w:val="([^"]*)"/i)?.[1]?.toLowerCase();
+            vMergeMode = vVal === 'restart' ? 'restart' : 'continue';
+          }
+
           const pTexts: string[] = [];
-          for (const pm of cm[0].matchAll(/<w:p(?:\s+[^>]*)?>[\s\S]*?<\/w:p>/g)) {
+          for (const pm of cellXml.matchAll(/<w:p(?:\s+[^>]*)?>[\s\S]*?<\/w:p>/g)) {
             const pt = extractParagraphText(pm[0]);
             if (pt) pTexts.push(pt);
           }
-          celdas.push(limpiarTextoInvisible(pTexts.join(' ')));
+          const textoCelda = limpiarTextoInvisible(pTexts.join(' '));
+
+          for (let k = 0; k < gridSpan; k++) {
+            const curCol = colIdx + k;
+            let valCol = textoCelda;
+            if (vMergeMode === 'continue') {
+              valCol = textoCelda || vMergeCols.get(curCol) || '';
+            } else if (vMergeMode === 'restart') {
+              vMergeCols.set(curCol, textoCelda);
+            } else {
+              vMergeCols.delete(curCol);
+            }
+            celdasExpandidas.push(valCol);
+          }
+          colIdx += gridSpan;
         }
-        if (celdas.some(Boolean)) {
-          filas.push(celdas);
+
+        if (celdasExpandidas.some(Boolean)) {
+          filas.push(celdasExpandidas);
         }
       }
+
       if (filas.length > 0) {
         bloques.push({ tipo: 'TABLA', filas });
       }
@@ -76,7 +101,22 @@ export const extraerContenidoDocx = async (bytes: Uint8Array): Promise<BloqueDoc
       }
     }
   }
+};
 
+export const extraerContenidoDocx = async (bytes: Uint8Array): Promise<BloqueDocx[]> => {
+  const zip = await JSZip.loadAsync(bytes);
+  const bloques: BloqueDocx[] = [];
+
+  for (const headerPath of ['word/header1.xml', 'word/header2.xml', 'word/header3.xml']) {
+    const headerXml = await leerArchivoZipTextoSeguro(zip, headerPath);
+    if (headerXml) {
+      parsearBloquesXml(headerXml, bloques);
+    }
+  }
+
+  const docXml = await leerArchivoZipTextoSeguro(zip, 'word/document.xml');
+  if (!docXml) return bloques;
+  parsearBloquesXml(docXml, bloques);
   return bloques;
 };
 
@@ -142,6 +182,7 @@ export const analizarDocx = async (
       correccionesAutomaticas: [],
       hojasDisponibles: [],
       datosDetectados: null,
+      comentariosDetectados: [],
       nombreArchivo: ctx.fileName,
       avisos: [],
       visionDisponible: false,
@@ -191,6 +232,22 @@ export const analizarDocx = async (
       if (bloque.tipo === 'PARRAFO') {
         const nextSec = detectarSeccion(bloque.texto);
         if (nextSec) seccion = nextSec;
+        if (seccion !== 'REFERENCIAS' && !cuit) {
+          const mCuit = bloque.texto.match(
+            /(?:c\.?u\.?i\.?t\.?\s*:?\s*)?(\b(?:20|23|24|27|30|33|34)[-\s]?\d{8}[-\s]?\d\b)/i
+          );
+          if (mCuit?.[1]) {
+            const digits = normalizarCuit(mCuit[1]);
+            if (validarCuit(digits)) {
+              cuit = digits;
+            } else if (digits.length === 11) {
+              cuit = digits;
+              avisosExtra.push(
+                `Revisá el CUIT de la ficha (${mCuit[1]}): el dígito verificador no coincide con AFIP.`
+              );
+            }
+          }
+        }
         continue;
       }
 
@@ -205,12 +262,16 @@ export const analizarDocx = async (
         if (seccion === 'REFERENCIAS') continue;
 
         const labelRaw = fila[0] ?? '';
-        const valRaw = fila.slice(1).join(' ').trim();
         const label = normalizarTexto(labelRaw);
+        let firstValIdx = 1;
+        while (firstValIdx < fila.length && normalizarTexto(fila[firstValIdx] ?? '') === label) {
+          firstValIdx++;
+        }
+        const valRaw = fila.slice(firstValIdx).join(' ').trim();
         const val = limpiarTextoInvisible(valRaw);
         if (!label || !val || /^_+$/.test(val)) continue;
 
-        if (/nombre o razon social/.test(label)) {
+        if (/nombre o razon social|^razon social/.test(label)) {
           if (!cliente) cliente = val;
         } else if (/^c\.?u\.?i\.?t\.?$/.test(label)) {
           const digits = normalizarCuit(val);
@@ -290,6 +351,7 @@ export const analizarDocx = async (
       correccionesAutomaticas: [],
       hojasDisponibles: [],
       datosDetectados,
+      comentariosDetectados: [],
       nombreArchivo: ctx.fileName,
       avisos: [
         'Detectamos una ficha de Alta de Cliente. Completamos los datos del cliente automáticamente; ahora podés subir la planilla o PDF del pedido.',
@@ -335,6 +397,7 @@ export const analizarDocx = async (
       correccionesAutomaticas: tab.correcciones,
       hojasDisponibles: [],
       datosDetectados,
+      comentariosDetectados: tab.comentariosDetectados,
       nombreArchivo: ctx.fileName,
       avisos: [],
       visionDisponible: false,
@@ -353,6 +416,7 @@ export const analizarDocx = async (
     correccionesAutomaticas: [],
     hojasDisponibles: [],
     datosDetectados: null,
+    comentariosDetectados: [],
     nombreArchivo: ctx.fileName,
     avisos: [],
     visionDisponible: false,

@@ -4,7 +4,7 @@ import {
 } from '@/lib/catalogo-mibi';
 import { auditoriaVacia } from '@/lib/excel-parser';
 import type { ProductoCatalogo, ResultadoAnalisisArchivo } from '@/lib/types';
-import { analizarPlanilla } from './analizar-planilla';
+import { analizarPlanilla, analizarPlanillaAsync } from './analizar-planilla';
 import { analizarDocx } from './docx-parser';
 import { detectarFormatoPorFirma, extensionCoincide } from './firma-archivo';
 import { analizarPdf } from './pdf-parser';
@@ -56,6 +56,7 @@ export const analizarArchivo = async (params: {
       correccionesAutomaticas: [],
       hojasDisponibles: [],
       datosDetectados: null,
+      comentariosDetectados: [],
       nombreArchivo: nombre,
       avisos: avisosBase,
       visionDisponible: false,
@@ -76,6 +77,7 @@ export const analizarArchivo = async (params: {
       correccionesAutomaticas: [],
       hojasDisponibles: [],
       datosDetectados: null,
+      comentariosDetectados: [],
       nombreArchivo: nombre,
       avisos: [
         ...avisosBase,
@@ -89,12 +91,20 @@ export const analizarArchivo = async (params: {
   if (formato === 'XLSX' || formato === 'XLS' || formato === 'CSV') {
     const ab = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
     const effectiveName = formato === 'CSV' && !/\.csv$/i.test(nombre) ? `${nombre}.csv` : nombre;
-    const res = analizarPlanilla({
-      buffer: ab,
-      nombre: effectiveName,
-      catalogo,
-      hojaSeleccionada
-    });
+    const res =
+      formato === 'XLSX'
+        ? await analizarPlanillaAsync({
+            buffer: ab,
+            nombre: effectiveName,
+            catalogo,
+            hojaSeleccionada
+          })
+        : analizarPlanilla({
+            buffer: ab,
+            nombre: effectiveName,
+            catalogo,
+            hojaSeleccionada
+          });
     return {
       ...res,
       nombreArchivo: nombre,

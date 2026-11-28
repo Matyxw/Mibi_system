@@ -33,7 +33,7 @@ import {
 } from '@/lib/excel-parser';
 import { addDaysISO, formatARS, formatARSCompacto, fromCents, getTodayISO, round2, toCents } from '@/lib/finanzas';
 import { detectarPedidoDuplicado } from '@/lib/import/anti-duplicado';
-import { analizarPlanilla } from '@/lib/import/analizar-planilla';
+import { analizarPlanillaAsync } from '@/lib/import/analizar-planilla';
 import { buildWhatsAppUrl, generarMensajeWhatsApp } from '@/lib/whatsapp';
 import type {
   AdvertenciaExcel,
@@ -446,7 +446,7 @@ export function NuevoPedidoView({
     const esPlanillaPorExt = ext === 'xlsx' || ext === 'xls' || ext === 'csv';
     if (esPlanillaPorExt && file.size > 4 * 1024 * 1024) {
       const buffer = await file.arrayBuffer();
-      return analizarPlanilla({
+      return analizarPlanillaAsync({
         buffer,
         nombre: file.name,
         catalogo: catalogoCompleto,
@@ -610,6 +610,9 @@ export function NuevoPedidoView({
         ],
         requiereConfirmacionHumana: prev ? prev.requiereConfirmacionHumana : false,
         confirmacionHumanaOk: prev ? prev.confirmacionHumanaOk : true,
+        duplicados: prev ? prev.duplicados : [],
+        duplicadosConfirmados: prev ? prev.duplicadosConfirmados : true,
+        comentarios: prev ? prev.comentarios : [],
         avisos: res.avisos
       }));
       onNotify(
@@ -638,6 +641,9 @@ export function NuevoPedidoView({
           ],
           requiereConfirmacionHumana: false,
           confirmacionHumanaOk: true,
+          duplicados: prev ? prev.duplicados : [],
+          duplicadosConfirmados: prev ? prev.duplicadosConfirmados : true,
+          comentarios: prev ? prev.comentarios : [],
           avisos: res.avisos
         }));
         onNotify(
@@ -713,6 +719,9 @@ export function NuevoPedidoView({
       camposAutocompletados,
       requiereConfirmacionHumana: res.requiereConfirmacionHumana,
       confirmacionHumanaOk: !res.requiereConfirmacionHumana,
+      duplicados: res.auditoria.duplicadosEnArchivo,
+      duplicadosConfirmados: res.auditoria.duplicadosEnArchivo.length === 0,
+      comentarios: res.comentariosDetectados,
       avisos: res.avisos
     });
 
@@ -1034,6 +1043,33 @@ export function NuevoPedidoView({
       onNotify(`Fila ${adv.fila} ignorada. No quedan alertas pendientes.`, 'neutral');
     } else {
       onNotify(`Fila ${adv.fila} ignorada (podés restaurarla desde la lista).`, 'neutral');
+    }
+  };
+
+  const handleAplicarCantidadEspecificaAlerta = (adv: AdvertenciaExcel, cantidadElegida: number): void => {
+    if (!Number.isInteger(cantidadElegida) || cantidadElegida <= 0) {
+      onNotify('La cantidad elegida debe ser mayor a 0.', 'amber');
+      return;
+    }
+    const prod = adv.productoExistenteIdGrupo
+      ? catalogoCompleto.find((p) => p.idGrupo === adv.productoExistenteIdGrupo)
+      : undefined;
+    if (!prod) {
+      onNotify('Asociá o creá primero el producto de esta fila.', 'amber');
+      return;
+    }
+    const nextLineas = aplicarLineaAlBorrador(lineasBorrador, prod, cantidadElegida, adv.notaDetectada);
+    const lineaFinal = nextLineas.find((l) => l.idGrupo === prod.idGrupo);
+    setLineasBorrador(nextLineas);
+    if (lineaFinal) {
+      setCantidadesManuales((prev) => ({ ...prev, [prod.idGrupo]: lineaFinal.cantidadTotal }));
+    }
+    const nextAlertas = advertenciasExcel.filter((a) => a.id !== adv.id);
+    setAdvertenciasExcel(nextAlertas);
+    if (nextAlertas.length === 0) {
+      onNotify(`${prod.nombre} (${cantidadElegida} u.) incluido. Todas las alertas resueltas.`, 'green');
+    } else {
+      onNotify(`${prod.nombre} (${cantidadElegida} u.) incluido en el pedido.`, 'green');
     }
   };
 
@@ -1472,6 +1508,14 @@ export function NuevoPedidoView({
     }
     if (
       controlImportacion &&
+      controlImportacion.duplicados.length > 0 &&
+      !controlImportacion.duplicadosConfirmados
+    ) {
+      onNotify('Confirmá los códigos repetidos antes de guardar.', 'amber');
+      return;
+    }
+    if (
+      controlImportacion &&
       controlImportacion.correcciones.length > 0 &&
       !controlImportacion.correccionesRevisadas
     ) {
@@ -1555,6 +1599,13 @@ export function NuevoPedidoView({
   if (advertenciasExcel.length > 0) faltantesParaGuardar.push('Revisá las alertas pendientes');
   if (hayDescuadreVivo && controlImportacion && !controlImportacion.descuadreConfirmado) {
     faltantesParaGuardar.push('Confirmá la diferencia en el control de totales');
+  }
+  if (
+    controlImportacion &&
+    controlImportacion.duplicados.length > 0 &&
+    !controlImportacion.duplicadosConfirmados
+  ) {
+    faltantesParaGuardar.push('Confirmá códigos repetidos en el archivo');
   }
   if (
     controlImportacion &&
@@ -1981,6 +2032,11 @@ export function NuevoPedidoView({
                   )
                 }
                 onCambiarCorreccion={handleCambiarCorreccion}
+                onConfirmarDuplicados={() =>
+                  setControlImportacion((prev) =>
+                    prev ? { ...prev, duplicadosConfirmados: true } : null
+                  )
+                }
                 onExtraerConVision={
                   visionDisponibleActual ? () => void handleExtraerConVision() : undefined
                 }
@@ -2482,7 +2538,23 @@ export function NuevoPedidoView({
                           <span className="px-2 py-0.5 rounded-md bg-zinc-100 text-zinc-700 dark:bg-[#2A2A32] dark:text-zinc-200 font-medium uppercase">
                             {adv.tipo === 'FILA_SIN_CODIGO'
                               ? 'Fila sin código'
-                              : `Cód. ${adv.codigo || '—'}`}
+                              : adv.tipo === 'FILA_OCULTA'
+                                ? adv.codigo
+                                  ? `Fila oculta · Cód. ${adv.codigo}`
+                                  : 'Fila oculta'
+                                : adv.tipo === 'FILA_TACHADA'
+                                  ? adv.codigo
+                                    ? `Fila tachada · Cód. ${adv.codigo}`
+                                    : 'Fila tachada'
+                                  : adv.tipo === 'ERROR_FORMULA'
+                                    ? adv.codigo
+                                      ? `Error de fórmula · Cód. ${adv.codigo}`
+                                      : 'Error de fórmula'
+                                    : adv.tipo === 'DESCUADRE_FILA'
+                                      ? `Subtotal distinto · Cód. ${adv.codigo || '—'}`
+                                      : adv.tipo === 'NOTA_CONTRADICTORIA'
+                                        ? `Nota contradictoria · Cód. ${adv.codigo || '—'}`
+                                        : `Cód. ${adv.codigo || '—'}`}
                           </span>
                           {adv.cantidadDetectada !== null && (
                             <span className="px-2 py-0.5 rounded-md bg-[#FCE7F3] text-[#111111] dark:bg-[#F4B6CE]/15 dark:text-[#FCE7F3] font-semibold">
@@ -2516,7 +2588,10 @@ export function NuevoPedidoView({
                         </div>
                       </div>
 
-                      {(adv.tipo === 'CODIGO_DESCONOCIDO' || adv.tipo === 'FILA_SIN_CODIGO') && (
+                      {(adv.tipo === 'CODIGO_DESCONOCIDO' ||
+                        adv.tipo === 'FILA_SIN_CODIGO' ||
+                        ((adv.tipo === 'FILA_OCULTA' || adv.tipo === 'FILA_TACHADA') &&
+                          !adv.productoExistenteIdGrupo)) && (
                         <div className="flex flex-wrap items-center gap-1.5 shrink-0">
                           <button
                             type="button"
@@ -2550,9 +2625,75 @@ export function NuevoPedidoView({
                           </button>
                         </div>
                       )}
+
+                      {(adv.tipo === 'FILA_OCULTA' || adv.tipo === 'FILA_TACHADA') &&
+                        Boolean(adv.productoExistenteIdGrupo) && (
+                          <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                            {(adv.cantidadDetectada ?? 0) > 0 && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleAplicarCantidadEspecificaAlerta(adv, adv.cantidadDetectada!)
+                                }
+                                className="inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-[11px] font-medium bg-zinc-900 hover:bg-zinc-800 text-white dark:bg-zinc-100 dark:hover:bg-white dark:text-zinc-950 transition-colors"
+                              >
+                                <Check className="w-3 h-3" strokeWidth={1.75} />
+                                Incluir igual ({adv.cantidadDetectada} u.)
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => handleIgnorarAlerta(adv)}
+                              className="px-2.5 py-1.5 rounded-full text-[11px] text-zinc-500 hover:text-red-700 hover:bg-red-50 dark:text-zinc-400 dark:hover:text-red-300 dark:hover:bg-red-500/10 transition-colors"
+                            >
+                              Ignorar fila
+                            </button>
+                          </div>
+                        )}
+
+                      {(adv.tipo === 'DESCUADRE_FILA' || adv.tipo === 'NOTA_CONTRADICTORIA') && (
+                        <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                          {(adv.cantidadDetectada ?? 0) > 0 && adv.productoExistenteIdGrupo && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                handleAplicarCantidadEspecificaAlerta(adv, adv.cantidadDetectada!)
+                              }
+                              className="inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-[11px] font-medium bg-zinc-900 hover:bg-zinc-800 text-white dark:bg-zinc-100 dark:hover:bg-white dark:text-zinc-950 transition-colors"
+                            >
+                              <Check className="w-3 h-3" strokeWidth={1.75} />
+                              Mantener {adv.cantidadDetectada} u.
+                            </button>
+                          )}
+                          {adv.cantidadAlternativa != null &&
+                            adv.cantidadAlternativa > 0 &&
+                            adv.cantidadAlternativa !== adv.cantidadDetectada &&
+                            adv.productoExistenteIdGrupo && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleAplicarCantidadEspecificaAlerta(
+                                    adv,
+                                    adv.cantidadAlternativa!
+                                  )
+                                }
+                                className="inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-[11px] font-medium border border-zinc-200 bg-white hover:bg-zinc-50 text-zinc-800 dark:bg-[#141417] dark:hover:bg-[#24242B] dark:border-[#2E2E35] dark:text-zinc-100 transition-colors"
+                              >
+                                Usar {adv.cantidadAlternativa} u.
+                              </button>
+                            )}
+                          <button
+                            type="button"
+                            onClick={() => handleIgnorarAlerta(adv)}
+                            className="px-2.5 py-1.5 rounded-full text-[11px] text-zinc-500 hover:text-red-700 hover:bg-red-50 dark:text-zinc-400 dark:hover:text-red-300 dark:hover:bg-red-500/10 transition-colors"
+                          >
+                            Ignorar fila
+                          </button>
+                        </div>
+                      )}
                     </div>
 
-                    {adv.tipo === 'CANTIDAD_INVALIDA' && (
+                    {(adv.tipo === 'CANTIDAD_INVALIDA' || adv.tipo === 'ERROR_FORMULA') && (
                       <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-zinc-100 dark:border-[#26262B]">
                         <span className="text-[11px] text-zinc-500 dark:text-zinc-400">
                           Ingresá cantidad correcta{adv.cantidadRaw ? ` (leído: "${adv.cantidadRaw}")` : ''}:

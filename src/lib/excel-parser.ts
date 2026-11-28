@@ -7,13 +7,16 @@ import {
 } from './catalogo-mibi';
 import { addDaysISO, formatNowDateTime, getTodayISO, recalcularPedido, round2 } from './finanzas';
 import { normalizarCuit, validarCuit } from './import/numeros';
+import { limpiarTextoComentarioExcel } from './import/xlsx-estilos';
 import type {
   AdvertenciaExcel,
   AuditoriaLectura,
   AvisoPrecioExcel,
   CellPrimitive,
+  ComentarioCeldaExcel,
   CorreccionAutomatica,
   DatosClienteDetectados,
+  DuplicadoEnArchivo,
   EstadoArmado,
   EstadoEnvio,
   HojaDisponible,
@@ -621,7 +624,10 @@ export const expandirCeldasCombinadas = (ws: SheetJSWorkSheet): CellPrimitive[][
     for (let c = 0; c <= range.e.c; c++) {
       const addr = XLSX.utils.encode_cell({ r, c });
       const cell = ws[addr] as SheetJSCellObject | undefined;
-      if (cell && cell.v !== undefined) {
+      if (cell && cell.t === 'e') {
+        const errTxt = cell.w ? limpiarTextoInvisible(cell.w) : typeof cell.v === 'string' && cell.v ? limpiarTextoInvisible(cell.v) : '#VALUE!';
+        row.push(errTxt);
+      } else if (cell && cell.v !== undefined) {
         if (cell.v instanceof Date) {
           row.push(cell.v.toISOString().slice(0, 10));
         } else if (typeof cell.v === 'string') {
@@ -651,6 +657,83 @@ export const expandirCeldasCombinadas = (ws: SheetJSWorkSheet): CellPrimitive[][
     }
   }
   return rows;
+};
+
+interface MetadatosHojaExcel {
+  filasOcultas: ReadonlySet<number>;
+  erroresFormula: ReadonlyMap<string, string>;
+  comentariosCelda: ReadonlyMap<string, string>;
+}
+
+const RE_ERROR_FORMULA_TEXTO = /^#(?:VALUE!|REF!|NAME\?|N\/A|DIV\/0!|NUM!)$/i;
+
+const extraerMetadatosHoja = (
+  ws: SheetJSWorkSheet,
+  comentariosThreaded?: ReadonlyMap<string, string>
+): MetadatosHojaExcel => {
+  const filasOcultas = new Set<number>();
+  const rowsMeta = ws['!rows'];
+  if (Array.isArray(rowsMeta)) {
+    for (let r = 0; r < rowsMeta.length; r++) {
+      if (rowsMeta[r]?.hidden === true) {
+        filasOcultas.add(r);
+      }
+    }
+  }
+
+  const erroresFormula = new Map<string, string>();
+  const comentariosCelda = new Map<string, string>();
+
+  if (comentariosThreaded) {
+    for (const [coord, txt] of comentariosThreaded.entries()) {
+      if (txt) comentariosCelda.set(coord, txt);
+    }
+  }
+
+  for (const [addr, rawCell] of Object.entries(ws)) {
+    if (addr.startsWith('!') || !rawCell || typeof rawCell !== 'object' || Array.isArray(rawCell)) {
+      continue;
+    }
+    const cell = rawCell as SheetJSCellObject;
+    let decoded: { r: number; c: number } | null = null;
+    const ensureDecoded = (): { r: number; c: number } => {
+      if (!decoded) decoded = XLSX.utils.decode_cell(addr);
+      return decoded;
+    };
+
+    if (cell.t === 'e' || (typeof cell.v === 'string' && RE_ERROR_FORMULA_TEXTO.test(cell.v.trim()))) {
+      const rc = ensureDecoded();
+      const errTxt = cell.w
+        ? limpiarTextoInvisible(cell.w)
+        : typeof cell.v === 'string' && cell.v
+          ? limpiarTextoInvisible(cell.v)
+          : '#VALUE!';
+      erroresFormula.set(`${rc.r}:${rc.c}`, errTxt);
+    }
+
+    if (Array.isArray(cell.c) && cell.c.length > 0) {
+      const partes = cell.c
+        .map((cm) => limpiarTextoComentarioExcel(cm.t ?? ''))
+        .filter(Boolean);
+      if (partes.length > 0) {
+        const rc = ensureDecoded();
+        const coord = `${rc.r}:${rc.c}`;
+        const textoLimpio = partes.join(' · ');
+        const existente = comentariosCelda.get(coord);
+        if (!existente) {
+          comentariosCelda.set(coord, textoLimpio);
+        } else if (!existente.includes(textoLimpio)) {
+          comentariosCelda.set(coord, `${existente} · ${textoLimpio}`);
+        }
+      }
+    }
+  }
+
+  return {
+    filasOcultas,
+    erroresFormula,
+    comentariosCelda
+  };
 };
 
 const parseCsvLine = (line: string, delimiter: string): string[] => {
@@ -695,7 +778,7 @@ export const leerWorkbookSeguro = (buffer: ArrayBuffer, fileName: string): Sheet
     const ws = XLSX.utils.aoa_to_sheet(lineasCsv) as unknown as SheetJSWorkSheet;
     return { SheetNames: ['CSV'], Sheets: { CSV: ws } };
   }
-  return XLSX.read(buffer, { type: 'array' }) as unknown as SheetJSWorkBook;
+  return XLSX.read(buffer, { type: 'array', cellStyles: true }) as unknown as SheetJSWorkBook;
 };
 
 export const parsearCantidadEstricta = (
@@ -946,8 +1029,69 @@ export const auditoriaVacia = (estadoIntegridad: AuditoriaLectura['estadoIntegri
   diferenciaImporte: null,
   filasOmitidasConDatos: 0,
   estadoIntegridad,
-  motivos: []
+  motivos: [],
+  descuentoDeclaradoPorc: null,
+  descuentoDeclaradoMonto: null,
+  ivaDeclaradoArchivo: null,
+  totalFacturadoDeclaradoArchivo: null,
+  duplicadosEnArchivo: []
 });
+
+export const detectarNegacionODuda = (texto: string): boolean => {
+  if (!texto) return false;
+  if (texto.includes('?')) return true;
+  const norm = normalizarTexto(texto);
+  if (!norm) return false;
+  return /\b(?:no|no\s+mandar|no\s+enviar|no\s+incluir|no\s+va|cancelar|cancelado|cancelada|anular|anulado|anulada|sacar|eliminar|sin\s+stock|faltante|consultar|a\s+confirmar|confirmar)\b/i.test(
+    norm
+  );
+};
+
+export const detectarCantidadContradictoriaTalleUnico = (
+  texto: string,
+  cantidadTotal: number,
+  codigosProducto: ReadonlySet<string> = new Set()
+): number | null => {
+  if (!texto) return null;
+  let norm = normalizarTexto(texto);
+  if (!norm) return null;
+
+  for (const cod of codigosProducto) {
+    const cleanCod = normalizarTexto(cod);
+    if (cleanCod) {
+      norm = norm.replace(new RegExp(`\\b${escapeRegex(cleanCod)}\\b`, 'gi'), ' ');
+    }
+  }
+
+  norm = norm
+    // Fechas dd/mm o dd/mm/yyyy
+    .replace(/\b\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?\b/g, ' ')
+    // Medidas 60x60 o 1,50 x 0,90
+    .replace(/\b\d+(?:[.,]\d+)?\s*x\s*\d+(?:[.,]\d+)?\b/gi, ' ')
+    // Edades 1 a 3 / 3 a 6 / 12-24 meses
+    .replace(/\b(?:de\s*)?\d{1,2}\s*(?:a|-)\s*\d{1,2}(?:\s*(?:anos?|meses|m))?\b/gi, ' ')
+    // Códigos numéricos de 4 dígitos (6526, 2026, etc.)
+    .replace(/\b\d{4}\b/g, ' ')
+    // Frases de reparto equitativo ya válidas ("2 de cada talle", "4 c/u")
+    .replace(/\b\d+\s*(?:c\/u\.?|c\.u\.|cada\s*un[oa]|de\s*cada\s*(?:un[oa]|talle|color))\b/gi, ' ');
+
+  const patrones: ReadonlyArray<RegExp> = [
+    /\b(?:mandar|enviar|solo|solamente|unicamente|en\s+realidad|son|pedir|total)\s+(?:son\s+)?(\d+)\b/gi,
+    /\b(\d+)\s*(?:u\.?(?=\s|$|[.,;])|unid(?:ades|ad|\.)?)\b/gi,
+    /(?:^|\s)[x*]\s*(\d+)\b/gi
+  ];
+
+  for (const re of patrones) {
+    for (const m of norm.matchAll(re)) {
+      const n = parseInt(m[1] ?? '0', 10);
+      if (Number.isInteger(n) && n > 0 && n !== cantidadTotal) {
+        return n;
+      }
+    }
+  }
+
+  return null;
+};
 
 const STOPWORDS_IDENTIFICACION = new Set([
   'de',
@@ -1037,8 +1181,14 @@ export interface ResultadoAnalisisTabular {
   advertencias: AdvertenciaExcel[];
   avisosPrecio: AvisoPrecioExcel[];
   correcciones: CorreccionAutomatica[];
+  comentariosDetectados: ComentarioCeldaExcel[];
+  duplicadosEnArchivo: DuplicadoEnArchivo[];
+  erroresFormulaPie: string[];
   unidadesDeclaradas: number | null;
   subtotalDeclarado: number | null;
+  descuentoDeclaradoPorc: number | null;
+  descuentoDeclaradoMonto: number | null;
+  ivaDeclaradoArchivo: number | null;
   totalConIvaDeclarado: number | null;
   subtotalCalculado: number;
   filasOmitidasConDatos: number;
@@ -1073,13 +1223,30 @@ export const analizarFilasTabulares = (
     catalogoPorCodigo: ReadonlyMap<string, ProductoCatalogo>;
     catalogoUnificado: ReadonlyArray<ProductoCatalogo>;
     fileName: string;
+    filasOcultas?: ReadonlySet<number>;
+    celdasTachadas?: ReadonlySet<string>;
+    erroresFormula?: ReadonlyMap<string, string>;
+    comentariosCelda?: ReadonlyMap<string, string>;
   }
 ): ResultadoAnalisisTabular => {
-  const { catalogoPorCodigo, catalogoUnificado } = ctx;
+  const {
+    catalogoPorCodigo,
+    catalogoUnificado,
+    filasOcultas,
+    celdasTachadas,
+    erroresFormula,
+    comentariosCelda
+  } = ctx;
   const advertencias: AdvertenciaExcel[] = [];
   const avisosPrecioMap = new Map<string, AvisoPrecioExcel>();
   const correcciones: CorreccionAutomatica[] = [];
   const correccionesPendientesLineaId: Array<{ corrIdx: number; idGrupo: string }> = [];
+  const comentariosDetectados: ComentarioCeldaExcel[] = [];
+  const erroresFormulaPie: string[] = [];
+  const aparicionesPorCodigo = new Map<
+    string,
+    { codigo: string; nombreProducto: string; idGrupo: string; apariciones: Array<{ fila: number; cantidad: number }> }
+  >();
   let lineasAcumuladas: LineaPedido[] = [];
 
   let colCodeA = 0;
@@ -1101,10 +1268,24 @@ export const analizarFilasTabulares = (
 
   let unidadesDeclaradas: number | null = null;
   let subtotalDeclarado: number | null = null;
+  let descuentoDeclaradoPorc: number | null = null;
+  let descuentoDeclaradoMonto: number | null = null;
+  let ivaDeclaradoArchivo: number | null = null;
   let totalConIvaDeclarado: number | null = null;
   let subtotalCalculado = 0;
   let filasOmitidasConDatos = 0;
   let descuentoDetectado: number | null = null;
+
+  const getCellError = (rIdx: number, cIdx: number): string | null => {
+    if (cIdx < 0) return null;
+    const metaErr = erroresFormula?.get(`${rIdx}:${cIdx}`);
+    if (metaErr) return metaErr;
+    const raw = rows[rIdx]?.[cIdx];
+    if (typeof raw === 'string' && RE_ERROR_FORMULA_TEXTO.test(limpiarTextoInvisible(raw))) {
+      return limpiarTextoInvisible(raw).toUpperCase();
+    }
+    return null;
+  };
 
   for (let rIdx = 0; rIdx < rows.length; rIdx++) {
     const row = rows[rIdx];
@@ -1123,6 +1304,15 @@ export const analizarFilasTabulares = (
       (t) => t.includes('talles/colores') || t.includes('talles / colores') || t.includes('talles/ colores')
     );
     const idxModelo = rowTexts.findIndex((t) => t.includes('modelo') || t === 'talle');
+    const idxObsNota = rowTexts.findIndex(
+      (t) =>
+        t === 'obs' ||
+        t.startsWith('observ') ||
+        t === 'nota' ||
+        t === 'notas' ||
+        t.startsWith('coment') ||
+        t.startsWith('aclarac')
+    );
     const idxDetalleFallback = rowTexts.findIndex((t) => t.includes('detalle') && !t.includes('producto'));
     const idxCodigos = rowTexts.findIndex((t) => t === 'codigos' || t === 'codigo' || t === 'codigo t1');
     const idxCodigoT2 = rowTexts.findIndex((t) => t === 'codigo t2');
@@ -1158,10 +1348,11 @@ export const analizarFilasTabulares = (
           colCodeEnd = idxCodigos + 1;
         }
       }
-      if (idxDesc !== -1) {
-        colDesc = idxDesc;
-        if (colCodeEnd >= idxDesc && idxDesc > colCodeA) {
-          colCodeEnd = idxDesc - 1;
+      const effDescIdx = idxDesc !== -1 ? idxDesc : idxDetalleFallback;
+      if (effDescIdx !== -1) {
+        colDesc = effDescIdx;
+        if (colCodeEnd >= effDescIdx && effDescIdx > colCodeA) {
+          colCodeEnd = effDescIdx - 1;
         }
       }
       if (idxPrecio !== -1) {
@@ -1193,7 +1384,10 @@ export const analizarFilasTabulares = (
       if (idxTalleColor !== -1) {
         colNota = idxTalleColor;
         hadNotaHeader = true;
-      } else if (idxDetalleFallback !== -1) {
+      } else if (idxObsNota !== -1) {
+        colNota = idxObsNota;
+        hadNotaHeader = true;
+      } else if (idxDetalleFallback !== -1 && idxDetalleFallback !== effDescIdx) {
         colNota = idxDetalleFallback;
         hadNotaHeader = true;
       } else if (!hadNotaHeader) {
@@ -1252,6 +1446,14 @@ export const analizarFilasTabulares = (
     }
 
     if (resumenTexto && !tieneCodigoCatalogoEnRango) {
+      for (let cErr = 0; cErr < row.length; cErr++) {
+        const errPie = getCellError(rIdx, cErr);
+        if (errPie) {
+          erroresFormulaPie.push(errPie);
+          break;
+        }
+      }
+
       if (
         unidadesDeclaradas === null &&
         (/^(?:total|total\s+(?:de\s+)?(?:unidades|cantidad(?:es)?|u\.?)|total\s+pedido)$/.test(resumenTexto) ||
@@ -1285,7 +1487,7 @@ export const analizarFilasTabulares = (
             subtotalDeclarado = round2(subVal);
           }
         }
-      } else if (/^(?:total\s+facturado|importe\s+total|total\s+a\s+pagar)\b/.test(resumenTexto)) {
+      } else if (/^(?:total\s+facturado|total\s+final|importe\s+total|total\s+a\s+pagar)\b/.test(resumenTexto)) {
         if (totalConIvaDeclarado === null) {
           const totCell =
             colSubtotal >= 0
@@ -1298,15 +1500,42 @@ export const analizarFilasTabulares = (
             totalConIvaDeclarado = round2(totVal);
           }
         }
-      } else if (/^(?:descuento|bonificaci)/.test(resumenTexto) && descuentoDetectado === null) {
+      } else if (/^(?:iva\b|impuestos?)/.test(resumenTexto)) {
+        if (ivaDeclaradoArchivo === null) {
+          const ivaCell =
+            colSubtotal >= 0
+              ? extractNumericFromCell(row[colSubtotal] ?? null)
+              : headerDetectado
+                ? null
+                : extractNumericFromCell(row[5] ?? null);
+          const ivaRight = rightmostNumeric(row);
+          const ivaVal = ivaCell ?? (ivaRight !== 21 ? ivaRight : null);
+          if (ivaVal !== null && ivaVal >= 0) {
+            ivaDeclaradoArchivo = round2(ivaVal);
+          }
+        }
+      } else if (/^(?:descuento|bonificaci)/.test(resumenTexto)) {
         for (const t of rowTexts) {
           const mPct = t.match(/(\d+(?:[.,]\d+)?)\s*%/);
           if (mPct && mPct[1]) {
             const pct = parseFloat(mPct[1].replace(',', '.'));
-            if (Number.isFinite(pct) && pct > 0 && pct < 100) {
-              descuentoDetectado = round2(pct);
+            if (Number.isFinite(pct) && pct > 0 && pct <= 50) {
+              if (descuentoDeclaradoPorc === null) descuentoDeclaradoPorc = round2(pct);
+              if (descuentoDetectado === null) descuentoDetectado = round2(pct);
               break;
             }
+          }
+        }
+        if (descuentoDeclaradoMonto === null) {
+          const descSubCell =
+            colSubtotal >= 0
+              ? extractNumericFromCell(row[colSubtotal] ?? null)
+              : headerDetectado
+                ? null
+                : extractNumericFromCell(row[5] ?? null);
+          const descVal = descSubCell !== null ? Math.abs(descSubCell) : null;
+          if (descVal !== null && descVal > 0) {
+            descuentoDeclaradoMonto = round2(descVal);
           }
         }
       }
@@ -1368,6 +1597,100 @@ export const analizarFilasTabulares = (
     const cantidadRaw =
       qtyCell !== null && qtyCell !== undefined ? limpiarTextoInvisible(String(qtyCell)) : '';
 
+    // Comentarios flotantes o modernos en cualquier celda relevante de esta fila
+    const colsRelevantesSet = new Set<number>();
+    for (let cIdx = Math.max(0, colCodeA); cIdx <= Math.min(row.length - 1, colCodeEnd); cIdx++) {
+      colsRelevantesSet.add(cIdx);
+    }
+    colsRelevantesSet.add(headerDetectado ? colDesc : 2);
+    if (headerDetectado ? colQty >= 0 : true) colsRelevantesSet.add(headerDetectado ? colQty : 4);
+    if (colT1 >= 0) colsRelevantesSet.add(colT1);
+    if (colT2 >= 0) colsRelevantesSet.add(colT2);
+    if (headerDetectado && colNota >= 0) colsRelevantesSet.add(colNota);
+    else if (!headerDetectado) colsRelevantesSet.add(6);
+
+    const rowComentarios: Array<{ col: number; texto: string }> = [];
+    if (comentariosCelda && comentariosCelda.size > 0) {
+      for (const cIdx of Array.from(colsRelevantesSet).sort((a, b) => a - b)) {
+        const cmTxt = comentariosCelda.get(`${rIdx}:${cIdx}`);
+        if (cmTxt) {
+          rowComentarios.push({ col: cIdx, texto: cmTxt });
+        }
+      }
+    }
+    const comentarioFilaTexto = Array.from(new Set(rowComentarios.map((x) => x.texto))).join(' · ');
+
+    // Verificar celdas tachadas en columnas clave de artículo
+    let filaEstaTachada = false;
+    if (celdasTachadas && celdasTachadas.size > 0) {
+      const colsStrikeCheck: number[] = [];
+      for (let cIdx = Math.max(0, colCodeA); cIdx <= Math.min(row.length - 1, colCodeEnd); cIdx++) {
+        colsStrikeCheck.push(cIdx);
+      }
+      colsStrikeCheck.push(headerDetectado ? colDesc : 2);
+      colsStrikeCheck.push(headerDetectado ? colQty : 4);
+      if (colT1 >= 0) colsStrikeCheck.push(colT1);
+      if (colT2 >= 0) colsStrikeCheck.push(colT2);
+      for (const cIdx of colsStrikeCheck) {
+        if (cIdx >= 0 && celdasTachadas.has(`${rIdx}:${cIdx}`)) {
+          filaEstaTachada = true;
+          break;
+        }
+      }
+    }
+
+    // Blindaje 5A: Errores de fórmula (#VALUE!, #REF!, etc.) en celdas numéricas de artículo
+    const colsErrorCheck: number[] = usaT1T2SinTotal
+      ? [colT1, colT2, headerDetectado ? colPrecio : 3, headerDetectado ? colSubtotal : 5]
+      : [
+          headerDetectado ? colQty : 4,
+          headerDetectado ? colPrecio : 3,
+          headerDetectado ? colSubtotal : 5
+        ];
+    let errorFormulaFila: string | null = null;
+    for (const cIdx of colsErrorCheck) {
+      const err = getCellError(rIdx, cIdx);
+      if (err) {
+        errorFormulaFila = err;
+        break;
+      }
+    }
+
+    if (errorFormulaFila && (codigosEnFila.length > 0 || (headerDetectado && rowTexts.some((t) => (t.match(/[a-z]/g)?.length ?? 0) >= 3)))) {
+      const codJoinedErr = codigosEnFila.join('/');
+      let prodErr: ProductoCatalogo | undefined;
+      for (const cod of codigosEnFila) {
+        const f =
+          catalogoPorCodigo.get(cod.toUpperCase()) ??
+          CATALOGO_EXTENDIDO_BY_CODIGO.get(cod) ??
+          CATALOGO_BY_CODIGO.get(cod);
+        if (f) {
+          prodErr = f;
+          break;
+        }
+      }
+      filasOmitidasConDatos += 1;
+      advertencias.push({
+        hoja,
+        fila: rIdx + 1,
+        codigo: codJoinedErr,
+        mensaje: `Error de fórmula (${errorFormulaFila}) en la fila.`,
+        id: `${hoja}#${rIdx + 1}#${codJoinedErr || 'SIN_COD'}#ERROR_FORMULA`,
+        tipo: 'ERROR_FORMULA',
+        codigosDetectados: codigosEnFila,
+        descripcionExcel,
+        precioExcelReferencia: null,
+        cantidadDetectada: null,
+        cantidadRaw: errorFormulaFila,
+        notaDetectada: notaDetectadaRaw || modeloDetectado,
+        productoExistenteIdGrupo: prodErr ? prodErr.idGrupo : null,
+        sugerenciasCatalogo: prodErr
+          ? []
+          : sugerirProductosCercanos(codJoinedErr, descripcionExcel, catalogoUnificado)
+      });
+      continue;
+    }
+
     let precioExcelReferencia: number | null = null;
     if (precioCell !== null && precioCell !== undefined && limpiarTextoInvisible(String(precioCell)) !== '') {
       const parsedPrecio =
@@ -1409,6 +1732,27 @@ export const analizarFilasTabulares = (
         if (!sugerencias.some((x) => x.idGrupo === s.idGrupo)) {
           sugerencias.push(s);
         }
+      }
+
+      if (filasOcultas?.has(rIdx) && qtyParaAlerta !== null && qtyParaAlerta > 0) {
+        filasOmitidasConDatos += 1;
+        advertencias.push({
+          hoja,
+          fila: rIdx + 1,
+          codigo: '',
+          mensaje: `Esta fila está oculta en el Excel pero tiene ${qtyParaAlerta} u. cargadas.`,
+          id: `${hoja}#${rIdx + 1}#FILA_OCULTA`,
+          tipo: 'FILA_OCULTA',
+          codigosDetectados: [],
+          descripcionExcel,
+          precioExcelReferencia,
+          cantidadDetectada: qtyParaAlerta,
+          cantidadRaw,
+          notaDetectada: notaDetectadaRaw || modeloDetectado,
+          productoExistenteIdGrupo: matchUnico ? matchUnico.idGrupo : null,
+          sugerenciasCatalogo: sugerencias.slice(0, 4)
+        });
+        continue;
       }
 
       const subFilaVal = extractNumericFromCell(subtotalCell);
@@ -1497,16 +1841,62 @@ export const analizarFilasTabulares = (
 
     if (qtyRes.qty === 0) continue;
 
-    const subFilaVal = extractNumericFromCell(subtotalCell);
-    if (subFilaVal !== null && subFilaVal > 0) {
-      subtotalCalculado = round2(subtotalCalculado + subFilaVal);
-    } else if (precioExcelReferencia !== null) {
-      subtotalCalculado = round2(subtotalCalculado + qtyRes.qty * precioExcelReferencia);
-    } else if (producto) {
-      subtotalCalculado = round2(subtotalCalculado + qtyRes.qty * producto.precioNeto);
+    // Blindaje 1: Fila oculta con cantidad > 0
+    if (filasOcultas?.has(rIdx)) {
+      filasOmitidasConDatos += 1;
+      advertencias.push({
+        hoja,
+        fila: rIdx + 1,
+        codigo: codigoJoined,
+        mensaje: `Esta fila está oculta en el Excel pero tiene ${qtyRes.qty} u. cargadas.`,
+        id: `${hoja}#${rIdx + 1}#${codigoJoined}#FILA_OCULTA`,
+        tipo: 'FILA_OCULTA',
+        codigosDetectados: codigosCorregidos,
+        descripcionExcel,
+        precioExcelReferencia,
+        cantidadDetectada: qtyRes.qty,
+        cantidadRaw,
+        notaDetectada: notaDetectadaRaw || comentarioFilaTexto || modeloDetectado,
+        productoExistenteIdGrupo: producto ? producto.idGrupo : null,
+        sugerenciasCatalogo: producto
+          ? []
+          : sugerirProductosCercanos(codigoJoined, descripcionExcel, catalogoUnificado)
+      });
+      continue;
+    }
+
+    // Blindaje 2: Fila o celda tachada con cantidad > 0
+    if (filaEstaTachada) {
+      filasOmitidasConDatos += 1;
+      advertencias.push({
+        hoja,
+        fila: rIdx + 1,
+        codigo: codigoJoined,
+        mensaje: `Esta fila aparece tachada en el Excel (${qtyRes.qty} u.).`,
+        id: `${hoja}#${rIdx + 1}#${codigoJoined}#FILA_TACHADA`,
+        tipo: 'FILA_TACHADA',
+        codigosDetectados: codigosCorregidos,
+        descripcionExcel,
+        precioExcelReferencia,
+        cantidadDetectada: qtyRes.qty,
+        cantidadRaw,
+        notaDetectada: notaDetectadaRaw || comentarioFilaTexto || modeloDetectado,
+        productoExistenteIdGrupo: producto ? producto.idGrupo : null,
+        sugerenciasCatalogo: producto
+          ? []
+          : sugerirProductosCercanos(codigoJoined, descripcionExcel, catalogoUnificado)
+      });
+      continue;
     }
 
     if (!producto) {
+      const subFilaValUnk = extractNumericFromCell(subtotalCell);
+      if (subFilaValUnk !== null && subFilaValUnk > 0) {
+        subtotalCalculado = round2(subtotalCalculado + subFilaValUnk);
+      } else if (precioExcelReferencia !== null) {
+        subtotalCalculado = round2(subtotalCalculado + qtyRes.qty * precioExcelReferencia);
+      }
+
       advertencias.push({
         hoja,
         fila: rIdx + 1,
@@ -1519,26 +1909,129 @@ export const analizarFilasTabulares = (
         precioExcelReferencia,
         cantidadDetectada: qtyRes.qty,
         cantidadRaw,
-        notaDetectada: notaDetectadaRaw || modeloDetectado,
+        notaDetectada: notaDetectadaRaw || comentarioFilaTexto || modeloDetectado,
         productoExistenteIdGrupo: null,
         sugerenciasCatalogo: sugerirProductosCercanos(codigoJoined, descripcionExcel, catalogoUnificado)
       });
       continue;
     }
 
+    // Blindaje 5B: Control matemático por fila (cantidad * precio vs subtotal)
+    const subFilaVal = extractNumericFromCell(subtotalCell);
+    if (
+      precioExcelReferencia !== null &&
+      precioExcelReferencia > 0 &&
+      subFilaVal !== null &&
+      subFilaVal > 0
+    ) {
+      const esperadoNeto = round2(qtyRes.qty * precioExcelReferencia);
+      const tol = Math.max(1.5, qtyRes.qty * 0.5);
+      const cierraNeto = Math.abs(subFilaVal - esperadoNeto) <= tol;
+      const cierraConIva = Math.abs(subFilaVal - round2(esperadoNeto * 1.21)) <= tol * 1.21;
+      if (!cierraNeto && !cierraConIva) {
+        const ratio = subFilaVal / precioExcelReferencia;
+        const qtyImplicita =
+          Math.abs(ratio - Math.round(ratio)) < 0.01 && Math.round(ratio) >= 1
+            ? Math.round(ratio)
+            : null;
+        filasOmitidasConDatos += 1;
+        advertencias.push({
+          hoja,
+          fila: rIdx + 1,
+          codigo: codigoJoined,
+          mensaje: `La fila indica ${qtyRes.qty} u. × $${precioExcelReferencia}, pero el subtotal dice $${subFilaVal}${qtyImplicita ? ` (equivalente a ${qtyImplicita} u.)` : ''}.`,
+          id: `${hoja}#${rIdx + 1}#${codigoJoined}#DESCUADRE_FILA`,
+          tipo: 'DESCUADRE_FILA',
+          codigosDetectados: codigosCorregidos,
+          descripcionExcel,
+          precioExcelReferencia,
+          cantidadDetectada: qtyRes.qty,
+          cantidadAlternativa: qtyImplicita,
+          cantidadRaw,
+          notaDetectada: notaDetectadaRaw || comentarioFilaTexto || modeloDetectado,
+          productoExistenteIdGrupo: producto.idGrupo,
+          sugerenciasCatalogo: []
+        });
+        continue;
+      }
+    }
+
+    // Blindaje 3: Nota base + Comentario flotante de celda
     let notaFinal = notaDetectadaRaw;
+    let aplicadoComoNota = false;
     if (colT1 !== -1 && colT2 !== -1 && producto.variantes.length === 2) {
       const q1Res = parsearCantidadEstricta(row[colT1] ?? 0);
       const q2Res = parsearCantidadEstricta(row[colT2] ?? 0);
       if (q1Res.valid && q2Res.valid && q1Res.qty + q2Res.qty === qtyRes.qty) {
         notaFinal = `${producto.variantes[0]!.codigo}: ${q1Res.qty} / ${producto.variantes[1]!.codigo}: ${q2Res.qty}`;
       }
+    } else if (!notaFinal && comentarioFilaTexto && producto.variantes.length >= 2) {
+      notaFinal = comentarioFilaTexto;
+      aplicadoComoNota = true;
     } else if (!notaFinal && producto.variantes.length >= 2) {
       if (codigosCorregidos.length === 1) {
         notaFinal = codigosCorregidos[0]!;
       } else if (modeloDetectado) {
         notaFinal = modeloDetectado;
       }
+    }
+
+    if (rowComentarios.length > 0 && comentarioFilaTexto) {
+      const primerCom = rowComentarios[0]!;
+      comentariosDetectados.push({
+        id: `${hoja}#${rIdx + 1}#COMENTARIO`,
+        hoja,
+        fila: rIdx + 1,
+        columna: primerCom.col,
+        celdaRef: XLSX.utils.encode_cell({ r: rIdx, c: primerCom.col }),
+        codigo: codigoJoined,
+        productoNombre: producto.nombre,
+        texto: comentarioFilaTexto,
+        aplicadoComoNota
+      });
+    }
+
+    // Blindaje 4: Guardián de negaciones, dudas y contradicciones (incluyendo Talle Único)
+    const textoAuditable = [notaDetectadaRaw, comentarioFilaTexto].filter(Boolean).join(' · ');
+    const tieneNegacionODuda = detectarNegacionODuda(textoAuditable);
+    const codsSetProd = new Set(producto.variantes.map((v) => v.codigo));
+    const cantidadAlternativa =
+      producto.variantes.length === 1
+        ? detectarCantidadContradictoriaTalleUnico(textoAuditable, qtyRes.qty, codsSetProd)
+        : null;
+
+    if (tieneNegacionODuda || cantidadAlternativa !== null) {
+      filasOmitidasConDatos += 1;
+      const mensajeContra = tieneNegacionODuda
+        ? `La nota o comentario ("${textoAuditable}") indica cancelación o duda sobre ${producto.nombre} (${qtyRes.qty} u.).`
+        : `Contradicción en ${producto.nombre}: la columna indica ${qtyRes.qty} u., pero la nota dice ${cantidadAlternativa} u. ("${textoAuditable}").`;
+
+      advertencias.push({
+        hoja,
+        fila: rIdx + 1,
+        codigo: codigoJoined,
+        mensaje: mensajeContra,
+        id: `${hoja}#${rIdx + 1}#${codigoJoined}#NOTA_CONTRADICTORIA`,
+        tipo: 'NOTA_CONTRADICTORIA',
+        codigosDetectados: codigosCorregidos,
+        descripcionExcel,
+        precioExcelReferencia,
+        cantidadDetectada: qtyRes.qty,
+        cantidadAlternativa,
+        cantidadRaw,
+        notaDetectada: textoAuditable,
+        productoExistenteIdGrupo: producto.idGrupo,
+        sugerenciasCatalogo: []
+      });
+      continue;
+    }
+
+    if (subFilaVal !== null && subFilaVal > 0) {
+      subtotalCalculado = round2(subtotalCalculado + subFilaVal);
+    } else if (precioExcelReferencia !== null) {
+      subtotalCalculado = round2(subtotalCalculado + qtyRes.qty * precioExcelReferencia);
+    } else {
+      subtotalCalculado = round2(subtotalCalculado + qtyRes.qty * producto.precioNeto);
     }
 
     if (
@@ -1556,6 +2049,25 @@ export const analizarFilasTabulares = (
     }
 
     lineasAcumuladas = aplicarLineaAlBorrador(lineasAcumuladas, producto, qtyRes.qty, notaFinal);
+
+    // Blindaje 5D: Registro para detectar exactamente el mismo código repetido en varias filas
+    const claveDup = codigosCorregidos
+      .slice()
+      .map((c) => c.trim().toUpperCase())
+      .sort()
+      .join('/');
+    let dupEntry = aparicionesPorCodigo.get(claveDup);
+    if (!dupEntry) {
+      dupEntry = {
+        codigo: codigoJoined,
+        nombreProducto: producto.nombre,
+        idGrupo: producto.idGrupo,
+        apariciones: [],
+        ...{}
+      };
+      aparicionesPorCodigo.set(claveDup, dupEntry);
+    }
+    dupEntry.apariciones.push({ fila: rIdx + 1, cantidad: qtyRes.qty });
 
     for (const cf of correccionesFila) {
       const idxCorr = correcciones.length;
@@ -1608,13 +2120,48 @@ export const analizarFilasTabulares = (
     }
   }
 
+  // Si hubo monto de descuento al pie sin % explícito, deducir porcentaje entero cuando cierra
+  if (
+    descuentoDeclaradoPorc === null &&
+    descuentoDeclaradoMonto !== null &&
+    descuentoDeclaradoMonto > 0 &&
+    subtotalDeclarado !== null &&
+    subtotalDeclarado > 0
+  ) {
+    const impliedPct = round2((descuentoDeclaradoMonto / subtotalDeclarado) * 100);
+    const pctInt = Math.round(impliedPct);
+    if (pctInt > 0 && pctInt <= 50 && Math.abs(impliedPct - pctInt) <= 0.15) {
+      descuentoDeclaradoPorc = pctInt;
+      if (descuentoDetectado === null) descuentoDetectado = pctInt;
+    }
+  }
+
+  const duplicadosEnArchivo: DuplicadoEnArchivo[] = [];
+  for (const d of aparicionesPorCodigo.values()) {
+    if (d.apariciones.length >= 2) {
+      duplicadosEnArchivo.push({
+        codigo: d.codigo,
+        nombreProducto: d.nombreProducto,
+        idGrupo: d.idGrupo,
+        apariciones: d.apariciones,
+        cantidadTotalSumada: d.apariciones.reduce((s, a) => s + a.cantidad, 0)
+      });
+    }
+  }
+
   return {
     lineas: lineasAcumuladas,
     advertencias,
     avisosPrecio: Array.from(avisosPrecioMap.values()),
     correcciones,
+    comentariosDetectados,
+    duplicadosEnArchivo,
+    erroresFormulaPie,
     unidadesDeclaradas,
     subtotalDeclarado,
+    descuentoDeclaradoPorc,
+    descuentoDeclaradoMonto,
+    ivaDeclaradoArchivo,
     totalConIvaDeclarado,
     subtotalCalculado: round2(subtotalCalculado),
     filasOmitidasConDatos,
@@ -1822,6 +2369,12 @@ export const construirAuditoriaDesdeTabular = (
   const motivos: string[] = [];
   let estadoIntegridad: AuditoriaLectura['estadoIntegridad'] = 'EXACTO';
 
+  if (tab.erroresFormulaPie.length > 0) {
+    estadoIntegridad = 'BLOQUEADO';
+    motivos.push(
+      `La celda de total de la planilla contiene un error de fórmula (${tab.erroresFormulaPie[0]}).`
+    );
+  }
   if (diferenciaUnidades !== null && diferenciaUnidades !== 0) {
     estadoIntegridad = 'BLOQUEADO';
     motivos.push(
@@ -1835,8 +2388,38 @@ export const construirAuditoriaDesdeTabular = (
     );
   }
 
+  // Cadena de 4 cifras al pie del Excel (Subtotal - Descuento + IVA 21% = Total Facturado)
+  if (tab.subtotalDeclarado !== null && tab.totalConIvaDeclarado !== null) {
+    const descMonto =
+      tab.descuentoDeclaradoMonto !== null
+        ? tab.descuentoDeclaradoMonto
+        : tab.descuentoDeclaradoPorc !== null
+          ? round2(tab.subtotalDeclarado * (tab.descuentoDeclaradoPorc / 100))
+          : 0;
+    const base = round2(tab.subtotalDeclarado - descMonto);
+    const ivaCalculado = round2(base * 0.21);
+    const ivaRef = tab.ivaDeclaradoArchivo ?? ivaCalculado;
+
+    if (tab.ivaDeclaradoArchivo !== null && Math.abs(ivaCalculado - tab.ivaDeclaradoArchivo) > 2) {
+      estadoIntegridad = 'BLOQUEADO';
+      motivos.push(
+        `El IVA al pie ($${tab.ivaDeclaradoArchivo.toFixed(2)}) no coincide con el 21% de la base ($${ivaCalculado.toFixed(2)}).`
+      );
+    } else if (Math.abs(round2(base + ivaRef) - tab.totalConIvaDeclarado) > 2) {
+      estadoIntegridad = 'BLOQUEADO';
+      motivos.push(
+        `El total facturado al pie ($${tab.totalConIvaDeclarado.toFixed(2)}) no coincide con Base + IVA ($${round2(base + ivaRef).toFixed(2)}).`
+      );
+    }
+  }
+
   if (estadoIntegridad !== 'BLOQUEADO') {
-    if (tab.advertencias.length > 0 || tab.correcciones.length > 0 || hojasDisponibles.length > 1) {
+    if (
+      tab.advertencias.length > 0 ||
+      tab.correcciones.length > 0 ||
+      tab.duplicadosEnArchivo.length > 0 ||
+      hojasDisponibles.length > 1
+    ) {
       estadoIntegridad = 'REVISAR';
     }
     if (tab.advertencias.length > 0) {
@@ -1844,6 +2427,11 @@ export const construirAuditoriaDesdeTabular = (
     }
     if (tab.correcciones.length > 0) {
       motivos.push(`Se aplicaron ${tab.correcciones.length} corrección(es) automática(s) revisables.`);
+    }
+    if (tab.duplicadosEnArchivo.length > 0) {
+      motivos.push(
+        `Se detectaron ${tab.duplicadosEnArchivo.length} código(s) repetidos en distintas filas.`
+      );
     }
     if (hojasDisponibles.length > 1) {
       motivos.push(`El libro contiene ${hojasDisponibles.length} hojas con artículos; se lee solo la seleccionada.`);
@@ -1860,7 +2448,12 @@ export const construirAuditoriaDesdeTabular = (
     diferenciaImporte,
     filasOmitidasConDatos: tab.filasOmitidasConDatos,
     estadoIntegridad,
-    motivos
+    motivos,
+    descuentoDeclaradoPorc: tab.descuentoDeclaradoPorc,
+    descuentoDeclaradoMonto: tab.descuentoDeclaradoMonto,
+    ivaDeclaradoArchivo: tab.ivaDeclaradoArchivo,
+    totalFacturadoDeclaradoArchivo: tab.totalConIvaDeclarado,
+    duplicadosEnArchivo: tab.duplicadosEnArchivo
   };
 };
 
@@ -1912,7 +2505,11 @@ export const parsearExcelLista006 = (
   buffer: ArrayBuffer,
   fileName: string,
   catalogoExtra: ReadonlyArray<ProductoCatalogo> = CATALOGO_EXTENDIDO_MIBI,
-  opciones?: { hojaSeleccionada?: string }
+  opciones?: {
+    hojaSeleccionada?: string;
+    celdasTachadasPorHoja?: ReadonlyMap<string, ReadonlySet<string>>;
+    comentariosThreadedPorHoja?: ReadonlyMap<string, ReadonlyMap<string, string>>;
+  }
 ): ResultadoParseoLista006 => {
   const catalogoPorCodigo = new Map<string, ProductoCatalogo>(CATALOGO_EXTENDIDO_BY_CODIGO);
   const catalogoUnificadoMap = new Map<string, ProductoCatalogo>();
@@ -1941,19 +2538,25 @@ export const parsearExcelLista006 = (
       auditoria: auditoriaVacia('BLOQUEADO'),
       correccionesAutomaticas: [],
       hojasDisponibles: [],
-      datosDetectados: null
+      datosDetectados: null,
+      comentariosDetectados: []
     };
   }
 
   let esLista006 = false;
   let tieneTablaEstructuradaMibi = false;
   const rowsPorHoja = new Map<string, CellPrimitive[][]>();
+  const metaPorHoja = new Map<string, MetadatosHojaExcel>();
 
   for (const sheetName of wb.SheetNames) {
     const ws = wb.Sheets[sheetName];
     if (!ws) continue;
     const rows = expandirCeldasCombinadas(ws);
     rowsPorHoja.set(sheetName, rows);
+    metaPorHoja.set(
+      sheetName,
+      extraerMetadatosHoja(ws, opciones?.comentariosThreadedPorHoja?.get(sheetName))
+    );
 
     if (detectarPlanillaGeneralEnRows(rows)) {
       return {
@@ -1967,7 +2570,8 @@ export const parsearExcelLista006 = (
         auditoria: auditoriaVacia('BLOQUEADO'),
         correccionesAutomaticas: [],
         hojasDisponibles: [],
-        datosDetectados: null
+        datosDetectados: null,
+        comentariosDetectados: []
       };
     }
 
@@ -2020,7 +2624,8 @@ export const parsearExcelLista006 = (
       auditoria: auditoriaVacia('BLOQUEADO'),
       correccionesAutomaticas: [],
       hojasDisponibles: [],
-      datosDetectados: null
+      datosDetectados: null,
+      comentariosDetectados: []
     };
   }
 
@@ -2029,6 +2634,7 @@ export const parsearExcelLista006 = (
   for (const sheetName of wb.SheetNames) {
     const rows = rowsPorHoja.get(sheetName);
     if (!rows) continue;
+    const meta = metaPorHoja.get(sheetName);
     const sheetNorm = normalizarTexto(sheetName);
     const esSecundaria =
       sheetNorm === 'a revisar' ||
@@ -2038,7 +2644,11 @@ export const parsearExcelLista006 = (
     const tab = analizarFilasTabulares(rows, sheetName, {
       catalogoPorCodigo,
       catalogoUnificado,
-      fileName
+      fileName,
+      filasOcultas: meta?.filasOcultas,
+      celdasTachadas: opciones?.celdasTachadasPorHoja?.get(sheetName),
+      erroresFormula: meta?.erroresFormula,
+      comentariosCelda: meta?.comentariosCelda
     });
     resultadosHojas.push({ nombre: sheetName, esSecundaria, rows, tab });
   }
@@ -2076,8 +2686,14 @@ export const parsearExcelLista006 = (
         advertencias: [],
         avisosPrecio: [],
         correcciones: [],
+        comentariosDetectados: [],
+        duplicadosEnArchivo: [],
+        erroresFormulaPie: [],
         unidadesDeclaradas: null,
         subtotalDeclarado: null,
+        descuentoDeclaradoPorc: null,
+        descuentoDeclaradoMonto: null,
+        ivaDeclaradoArchivo: null,
         totalConIvaDeclarado: null,
         subtotalCalculado: 0,
         filasOmitidasConDatos: 0,
@@ -2105,7 +2721,8 @@ export const parsearExcelLista006 = (
     auditoria,
     correccionesAutomaticas: tabFinal.correcciones,
     hojasDisponibles,
-    datosDetectados
+    datosDetectados,
+    comentariosDetectados: tabFinal.comentariosDetectados
   };
 };
 

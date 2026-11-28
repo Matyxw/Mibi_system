@@ -179,6 +179,7 @@ export const extraerConVision = async (params: {
     correccionesAutomaticas: tab.correcciones,
     hojasDisponibles: [],
     datosDetectados,
+    comentariosDetectados: [],
     nombreArchivo: params.fileName,
     avisos: ['Revisá los datos extraídos frente a la imagen antes de confirmar.'],
     visionDisponible: true,

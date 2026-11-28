@@ -29,6 +29,7 @@ const LABELS_TIPO: Record<TipoArchivoDetectado, string> = {
   PEDIDO_DOCX: 'Pedido en Word',
   IMAGEN_O_PDF_ESCANEADO: 'Imagen de referencia',
   PLANILLA_GENERAL_ADMIN: 'Planilla general',
+  COMPROBANTE_NO_PEDIDO: 'Comprobante no válido',
   NO_COMPATIBLE: 'No compatible'
 };
 
@@ -53,6 +54,7 @@ interface PanelVerificacionImportacionProps {
   onAplicarCampoIgual: (campo: CampoAutocompletadoImport['campo']) => void;
   onAprobarCorrecciones: () => void;
   onCambiarCorreccion: (corr: CorreccionAutomatica) => void;
+  onConfirmarDuplicados: () => void;
   onExtraerConVision?: () => void;
   onConfirmarDatosVision: () => void;
 }
@@ -70,6 +72,7 @@ export function PanelVerificacionImportacion({
   onAplicarCampoIgual,
   onAprobarCorrecciones,
   onCambiarCorreccion,
+  onConfirmarDuplicados,
   onExtraerConVision,
   onConfirmarDatosVision
 }: PanelVerificacionImportacionProps): React.JSX.Element {
@@ -247,6 +250,74 @@ export function PanelVerificacionImportacion({
                 </div>
               );
             })}
+          </div>
+        </div>
+      )}
+
+      {/* Bloque ámbar de Códigos repetidos en el archivo */}
+      {control.duplicados.length > 0 && (
+        <div
+          className={`rounded-xl border px-3.5 py-2.5 space-y-2 ${
+            control.duplicadosConfirmados
+              ? 'bg-zinc-50 border-zinc-200 dark:bg-[#1B1B1F] dark:border-[#26262B] text-zinc-600 dark:text-zinc-300'
+              : 'bg-amber-50/70 border-amber-200/80 dark:bg-amber-500/10 dark:border-amber-500/25 text-amber-900 dark:text-amber-200'
+          }`}
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-[11px] font-semibold">
+              {control.duplicadosConfirmados
+                ? `Códigos repetidos confirmados (${control.duplicados.length})`
+                : `Código repetido en el archivo (${control.duplicados.length})`}
+            </span>
+            {!control.duplicadosConfirmados && (
+              <button
+                type="button"
+                onClick={onConfirmarDuplicados}
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-medium bg-zinc-900 text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-950 transition-colors duration-150 active:scale-[0.98]"
+              >
+                <Check className="w-3 h-3" strokeWidth={1.75} />
+                Está bien (sumar ambas)
+              </button>
+            )}
+          </div>
+          <div className="space-y-1.5">
+            {control.duplicados.map((dup) => (
+              <div
+                key={`${dup.codigo}-${dup.apariciones.map((a) => a.fila).join('-')}`}
+                className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-white/80 dark:bg-[#141417] border border-amber-200/50 dark:border-[#2E2E35] px-2.5 py-1.5 text-[11px] tabular-nums"
+              >
+                <span className="font-medium text-[#111111] dark:text-[#F4F4F5]">
+                  Cód. {dup.codigo} · {dup.nombreProducto}
+                </span>
+                <span className="text-zinc-500 dark:text-zinc-400">
+                  Filas {dup.apariciones.map((a) => a.fila).join(', ')}:{' '}
+                  {dup.apariciones.map((a) => a.cantidad).join(' + ')} u. = {dup.cantidadTotalSumada} u.
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Comentarios de celda detectados en la planilla */}
+      {control.comentarios.length > 0 && (
+        <div className="rounded-xl bg-[#FAFAFA] dark:bg-[#1B1B1F] border border-zinc-200/80 dark:border-[#26262B] px-3.5 py-2.5 space-y-1.5 text-zinc-600 dark:text-zinc-300">
+          <div className="text-[11px] font-medium text-zinc-500 dark:text-zinc-400">
+            Comentarios de celda detectados ({control.comentarios.length})
+          </div>
+          <div className="space-y-1">
+            {control.comentarios.map((c) => (
+              <div key={c.id} className="flex items-start gap-2 text-[11px]">
+                <Info className="w-3.5 h-3.5 text-zinc-400 shrink-0 mt-0.5" strokeWidth={1.75} />
+                <div className="min-w-0">
+                  <span className="font-medium text-[#111111] dark:text-[#F4F4F5]">
+                    Hoja {c.hoja} · Fila {c.fila}
+                    {c.codigo ? ` · Cód. ${c.codigo}` : ''}:
+                  </span>{' '}
+                  <span>{c.texto}</span>
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       )}
