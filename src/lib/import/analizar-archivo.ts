@@ -88,7 +88,7 @@ export const analizarArchivo = async (params: {
     };
   }
 
-  if (formato === 'XLSX' || formato === 'XLS' || formato === 'CSV') {
+  if (formato === 'XLSX' || formato === 'XLS' || formato === 'ODS' || formato === 'CSV') {
     const ab = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
     const effectiveName = formato === 'CSV' && !/\.csv$/i.test(nombre) ? `${nombre}.csv` : nombre;
     const res =

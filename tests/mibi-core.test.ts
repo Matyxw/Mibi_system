@@ -93,6 +93,7 @@ import { POST as exportTableroPost } from '@/app/api/export/tablero/route';
 import { POST as analizarImportPost } from '@/app/api/import/analizar/route';
 import { AuthError } from '@/lib/dal/auth';
 import { detectarPedidoDuplicado } from '@/lib/import/anti-duplicado';
+import { analizarArchivo } from '@/lib/import/analizar-archivo';
 import { analizarPlanillaAsync } from '@/lib/import/analizar-planilla';
 import { analizarDocx } from '@/lib/import/docx-parser';
 import { detectarFormatoPorFirma } from '@/lib/import/firma-archivo';
@@ -2781,5 +2782,127 @@ Mandar sin falta antes del viernes</text>
     await expect(leerArchivoZipTextoSeguro(loaded, 'xl/styles.xml')).rejects.toThrow(
       /estructura interna demasiado grande/i
     );
+  });
+
+  it('80. Micro-Blindaje A1: detecta fórmula sin resultado guardado en cantidad (6511) y respeta fórmula con resultado cacheado', () => {
+    const p6510 = CATALOGO_BY_CODIGO.get('6510')!;
+    const p6511 = CATALOGO_BY_CODIGO.get('6511')!;
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet([
+      ['CODIGO', 'PRODUCTO', 'CANTIDAD', 'PRECIO'],
+      ['6510', p6510.nombre, 0, p6510.precioNeto],
+      ['6511', p6511.nombre, 0, p6511.precioNeto]
+    ]);
+    ws['C2'] = { t: 'n', f: '2+2', v: 4 };
+    ws['C3'] = { t: 'n', f: '2+2' };
+    XLSX.utils.book_append_sheet(wb, ws, 'Pedido');
+    const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer;
+
+    const res = parsearExcelLista006(buf, 'formula_sin_cache.xlsx', CATALOGO_EXTENDIDO_MIBI);
+    expect(res.ok).toBe(true);
+    // 6510 con fórmula cacheada (=4) carga sin falsos positivos
+    const l6510 = res.lineas.find((l) => l.idGrupo === p6510.idGrupo);
+    expect(l6510).toBeDefined();
+    expect(l6510!.cantidadTotal).toBe(4);
+    // 6511 con fórmula sin caché no se pierde en silencio y genera ERROR_FORMULA vinculada a '6511'
+    const alerta6511 = res.advertencias.find(
+      (a) => a.tipo === 'ERROR_FORMULA' && a.productoExistenteIdGrupo === p6511.idGrupo
+    );
+    expect(alerta6511).toBeDefined();
+    expect(alerta6511!.cantidadRaw).toBe('=2+2');
+    expect(alerta6511!.mensaje).toContain('fórmula sin resultado guardado');
+  });
+
+  it('81. Micro-Blindaje A2: fórmula sin caché en SUBTOTAL de fila y de cierre avisa en motivos y nunca marca EXACTO en silencio', () => {
+    const p6510 = CATALOGO_BY_CODIGO.get('6510')!;
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet([
+      ['CODIGO', 'PRODUCTO', 'CANTIDAD', 'PRECIO', 'SUBTOTAL'],
+      ['6510', p6510.nombre, 3, p6510.precioNeto, 0],
+      ['SUBTOTAL', '', '', '', 0]
+    ]);
+    ws['E2'] = { t: 'n', f: 'C2*D2' };
+    ws['E3'] = { t: 'n', f: 'SUM(E2:E2)' };
+    XLSX.utils.book_append_sheet(wb, ws, 'Pedido');
+    const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer;
+
+    const res = parsearExcelLista006(buf, 'subtotal_sin_cache.xlsx', CATALOGO_EXTENDIDO_MIBI);
+    expect(res.ok).toBe(true);
+    expect(res.lineas).toHaveLength(1);
+    expect(res.advertencias.some((a) => a.tipo === 'DESCUADRE_FILA')).toBe(false);
+    expect(res.auditoria.estadoIntegridad).toBe('REVISAR');
+    expect(
+      res.auditoria.motivos.some((m) => m.includes('fórmula sin resultado guardado en el archivo'))
+    ).toBe(true);
+  });
+
+  it('82. Micro-Blindaje B: soporta LibreOffice Calc (.ods) por firma binaria, analizarArchivo y POST /api/import/analizar (ADMIN 200 / DEPOSITO 403)', async () => {
+    const p6510 = CATALOGO_BY_CODIGO.get('6510')!;
+    const p6511 = CATALOGO_BY_CODIGO.get('6511')!;
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet([
+      ['CODIGO', 'PRODUCTO', 'CANTIDAD', 'PRECIO', 'SUBTOTAL'],
+      ['6510', p6510.nombre, 2, p6510.precioNeto, 2 * p6510.precioNeto],
+      ['6511', p6511.nombre, 3, p6511.precioNeto, 3 * p6511.precioNeto],
+      ['TOTAL DE UNIDADES', '', 5, '', ''],
+      ['SUBTOTAL', '', '', '', 2 * p6510.precioNeto + 3 * p6511.precioNeto]
+    ]);
+    XLSX.utils.book_append_sheet(wb, ws, 'PedidoODS');
+    const odsAb = XLSX.write(wb, { type: 'array', bookType: 'ods' }) as ArrayBuffer;
+    const odsBytes = new Uint8Array(odsAb);
+
+    expect(await detectarFormatoPorFirma(odsBytes, 'planilla.ods')).toBe('ODS');
+    expect(await detectarFormatoPorFirma(odsBytes, 'renombrada.xlsx')).toBe('ODS');
+
+    const resDirect = await analizarArchivo({ bytes: odsBytes, nombre: 'cliente_libreoffice.ods' });
+    expect(resDirect.ok).toBe(true);
+    expect(resDirect.lineas).toHaveLength(2);
+    expect(resDirect.auditoria.unidadesLeidas).toBe(5);
+    expect(resDirect.auditoria.estadoIntegridad).toBe('EXACTO');
+
+    mockSession = {
+      userId: '00000000-0000-4000-8000-000000000006',
+      username: 'deposito',
+      nombre: 'Depósito',
+      rol: 'DEPOSITO',
+      tokenVersion: 1
+    };
+    const fdDep = new FormData();
+    fdDep.append(
+      'archivo',
+      new File([odsBytes], 'cliente_libreoffice.ods', {
+        type: 'application/vnd.oasis.opendocument.spreadsheet'
+      })
+    );
+    const res403 = await analizarImportPost(
+      new NextRequest('http://localhost/api/import/analizar', { method: 'POST', body: fdDep })
+    );
+    expect(res403.status).toBe(403);
+
+    mockSession = {
+      userId: '00000000-0000-4000-8000-000000000001',
+      username: 'admin',
+      nombre: 'Administración',
+      rol: 'ADMIN',
+      tokenVersion: 1
+    };
+    const fdAdmin = new FormData();
+    fdAdmin.append(
+      'archivo',
+      new File([odsBytes], 'cliente_libreoffice.ods', {
+        type: 'application/vnd.oasis.opendocument.spreadsheet'
+      })
+    );
+    const res200 = await analizarImportPost(
+      new NextRequest('http://localhost/api/import/analizar', { method: 'POST', body: fdAdmin })
+    );
+    expect(res200.status).toBe(200);
+    const json200 = (await res200.json()) as {
+      ok: boolean;
+      auditoria: { unidadesLeidas: number; estadoIntegridad: string };
+    };
+    expect(json200.ok).toBe(true);
+    expect(json200.auditoria.unidadesLeidas).toBe(5);
+    expect(json200.auditoria.estadoIntegridad).toBe('EXACTO');
   });
 });

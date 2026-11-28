@@ -200,7 +200,12 @@ export const extraerEstilosYComentariosXlsx = async (
     return empty;
   }
 
-  const zip = await JSZip.loadAsync(bytes);
+  let zip: JSZip;
+  try {
+    zip = await JSZip.loadAsync(bytes);
+  } catch {
+    return empty;
+  }
   const hasWorkbook =
     Boolean(zip.file('xl/workbook.xml')) ||
     Object.keys(zip.files).some((k) => k.toLowerCase() === 'xl/workbook.xml');

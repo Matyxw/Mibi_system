@@ -46,6 +46,7 @@ export type CellPrimitive = string | number | boolean | null;
 export interface SheetJSCellObject {
   v?: string | number | boolean | Date;
   t?: string;
+  f?: string;
   z?: string;
   w?: string;
   c?: Array<{ a?: string; t?: string }>;

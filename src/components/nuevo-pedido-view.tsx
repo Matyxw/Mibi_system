@@ -443,7 +443,7 @@ export function NuevoPedidoView({
     }
 
     const ext = file.name.split('.').pop()?.toLowerCase() ?? '';
-    const esPlanillaPorExt = ext === 'xlsx' || ext === 'xls' || ext === 'csv';
+    const esPlanillaPorExt = ext === 'xlsx' || ext === 'xls' || ext === 'ods' || ext === 'csv';
     if (esPlanillaPorExt && file.size > 4 * 1024 * 1024) {
       const buffer = await file.arrayBuffer();
       return analizarPlanillaAsync({
@@ -1649,7 +1649,7 @@ export function NuevoPedidoView({
           ref={fileInputListaRef}
           type="file"
           multiple
-          accept=".xlsx,.xls,.csv,.pdf,.docx,.jpg,.jpeg,.png,.webp"
+          accept=".xlsx,.xls,.ods,.csv,.pdf,.docx,.jpg,.jpeg,.png,.webp"
           className="hidden"
           onChange={(e) => {
             if (e.target.files && e.target.files.length > 0) {
@@ -1973,7 +1973,7 @@ export function NuevoPedidoView({
                     : 'Arrastrá el pedido del cliente o hacé clic para elegir'}
               </p>
               <p className="mt-1 text-xs text-zinc-400 dark:text-zinc-500">
-                Soporta Excel, CSV, Factura AFIP o Pedido PDF, Alta en Word (.docx) e imágenes
+                Soporta Excel, LibreOffice (.ods), CSV, Factura AFIP o Pedido PDF, Alta en Word (.docx) e imágenes
               </p>
             </div>
 

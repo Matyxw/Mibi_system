@@ -614,6 +614,17 @@ export const crearLineasEjemploLista006 = (): LineaPedido[] => {
   return lineas;
 };
 
+export const esFormulaSinResultado = (
+  cell: SheetJSCellObject | XLSX.CellObject | undefined
+): boolean => {
+  if (!cell || typeof cell.f !== 'string' || cell.f.trim().length === 0) return false;
+  if (cell.t === 'e') return false;
+  if (cell.t === 'z') return true;
+  if (cell.v === undefined || cell.v === null) return true;
+  if (typeof cell.v === 'string' && cell.v.trim() === '') return true;
+  return false;
+};
+
 export const expandirCeldasCombinadas = (ws: SheetJSWorkSheet): CellPrimitive[][] => {
   const ref = ws['!ref'];
   if (!ref) return [];
@@ -627,6 +638,8 @@ export const expandirCeldasCombinadas = (ws: SheetJSWorkSheet): CellPrimitive[][
       if (cell && cell.t === 'e') {
         const errTxt = cell.w ? limpiarTextoInvisible(cell.w) : typeof cell.v === 'string' && cell.v ? limpiarTextoInvisible(cell.v) : '#VALUE!';
         row.push(errTxt);
+      } else if (esFormulaSinResultado(cell)) {
+        row.push(null);
       } else if (cell && cell.v !== undefined) {
         if (cell.v instanceof Date) {
           row.push(cell.v.toISOString().slice(0, 10));
@@ -662,6 +675,7 @@ export const expandirCeldasCombinadas = (ws: SheetJSWorkSheet): CellPrimitive[][
 interface MetadatosHojaExcel {
   filasOcultas: ReadonlySet<number>;
   erroresFormula: ReadonlyMap<string, string>;
+  formulasSinResultado: ReadonlyMap<string, string>;
   comentariosCelda: ReadonlyMap<string, string>;
 }
 
@@ -682,6 +696,7 @@ const extraerMetadatosHoja = (
   }
 
   const erroresFormula = new Map<string, string>();
+  const formulasSinResultado = new Map<string, string>();
   const comentariosCelda = new Map<string, string>();
 
   if (comentariosThreaded) {
@@ -709,6 +724,9 @@ const extraerMetadatosHoja = (
           ? limpiarTextoInvisible(cell.v)
           : '#VALUE!';
       erroresFormula.set(`${rc.r}:${rc.c}`, errTxt);
+    } else if (esFormulaSinResultado(cell)) {
+      const rc = ensureDecoded();
+      formulasSinResultado.set(`${rc.r}:${rc.c}`, `=${cell.f!.trim().replace(/^=+/, '')}`);
     }
 
     if (Array.isArray(cell.c) && cell.c.length > 0) {
@@ -732,6 +750,7 @@ const extraerMetadatosHoja = (
   return {
     filasOcultas,
     erroresFormula,
+    formulasSinResultado,
     comentariosCelda
   };
 };
@@ -1184,6 +1203,8 @@ export interface ResultadoAnalisisTabular {
   comentariosDetectados: ComentarioCeldaExcel[];
   duplicadosEnArchivo: DuplicadoEnArchivo[];
   erroresFormulaPie: string[];
+  formulasSinResultadoPie: string[];
+  filasSubtotalFormulaSinResultado: number;
   unidadesDeclaradas: number | null;
   subtotalDeclarado: number | null;
   descuentoDeclaradoPorc: number | null;
@@ -1226,6 +1247,7 @@ export const analizarFilasTabulares = (
     filasOcultas?: ReadonlySet<number>;
     celdasTachadas?: ReadonlySet<string>;
     erroresFormula?: ReadonlyMap<string, string>;
+    formulasSinResultado?: ReadonlyMap<string, string>;
     comentariosCelda?: ReadonlyMap<string, string>;
   }
 ): ResultadoAnalisisTabular => {
@@ -1235,6 +1257,7 @@ export const analizarFilasTabulares = (
     filasOcultas,
     celdasTachadas,
     erroresFormula,
+    formulasSinResultado,
     comentariosCelda
   } = ctx;
   const advertencias: AdvertenciaExcel[] = [];
@@ -1243,6 +1266,8 @@ export const analizarFilasTabulares = (
   const correccionesPendientesLineaId: Array<{ corrIdx: number; idGrupo: string }> = [];
   const comentariosDetectados: ComentarioCeldaExcel[] = [];
   const erroresFormulaPie: string[] = [];
+  const formulasSinResultadoPie: string[] = [];
+  let filasSubtotalFormulaSinResultado = 0;
   const aparicionesPorCodigo = new Map<
     string,
     { codigo: string; nombreProducto: string; idGrupo: string; apariciones: Array<{ fila: number; cantidad: number }> }
@@ -1285,6 +1310,11 @@ export const analizarFilasTabulares = (
       return limpiarTextoInvisible(raw).toUpperCase();
     }
     return null;
+  };
+
+  const getCellFormulaSinResultado = (rIdx: number, cIdx: number): string | null => {
+    if (cIdx < 0 || !formulasSinResultado) return null;
+    return formulasSinResultado.get(`${rIdx}:${cIdx}`) ?? null;
   };
 
   for (let rIdx = 0; rIdx < rows.length; rIdx++) {
@@ -1451,6 +1481,10 @@ export const analizarFilasTabulares = (
         if (errPie) {
           erroresFormulaPie.push(errPie);
           break;
+        }
+        const formulaSinResPie = getCellFormulaSinResultado(rIdx, cErr);
+        if (formulaSinResPie) {
+          formulasSinResultadoPie.push(formulaSinResPie);
         }
       }
 
@@ -1704,6 +1738,71 @@ export const analizarFilasTabulares = (
       }
     }
 
+    // Micro-Blindaje A: Fórmula de Excel sin valor precalculado en celdas de cantidad
+    const colsQtyFormulaCheck: number[] =
+      colT1 !== -1 && colT2 !== -1
+        ? colTotalPed !== -1
+          ? [colTotalPed, colT1, colT2]
+          : [colT1, colT2]
+        : [headerDetectado ? colQty : 4];
+    let formulaSinResultadoQty: string | null = null;
+    for (const cIdx of colsQtyFormulaCheck) {
+      const fSin = getCellFormulaSinResultado(rIdx, cIdx);
+      if (fSin) {
+        formulaSinResultadoQty = fSin;
+        break;
+      }
+    }
+    if (
+      formulaSinResultadoQty &&
+      (codigosEnFila.length > 0 ||
+        (headerDetectado &&
+          (rowTexts.some((t) => (t.match(/[a-z]/g)?.length ?? 0) >= 3) ||
+            precioExcelReferencia !== null)))
+    ) {
+      const descNormFormula = normalizarTexto(descripcionExcel);
+      const modeloNormFormula = normalizarTexto(modeloDetectado);
+      const codigosCorregidosFormula = codigosEnFila.map(
+        (c) => corregirCodigoConContexto(c, descNormFormula, modeloNormFormula)?.corregido ?? c
+      );
+      const codJoinedFormula = codigosCorregidosFormula.join('/');
+      let prodFormula: ProductoCatalogo | undefined;
+      for (const cod of codigosCorregidosFormula) {
+        const enc =
+          catalogoPorCodigo.get(cod.toUpperCase()) ??
+          CATALOGO_EXTENDIDO_BY_CODIGO.get(cod) ??
+          CATALOGO_BY_CODIGO.get(cod);
+        if (enc) {
+          prodFormula = enc;
+          break;
+        }
+      }
+      if (!prodFormula && descripcionExcel) {
+        prodFormula = identificarProductoPorDescripcion(descripcionExcel, catalogoUnificado) ?? undefined;
+      }
+      filasOmitidasConDatos += 1;
+      advertencias.push({
+        hoja,
+        fila: rIdx + 1,
+        codigo: codJoinedFormula,
+        mensaje:
+          'Esta celda tiene una fórmula sin resultado guardado. Ingresá la cantidad real o guardá nuevamente el Excel.',
+        id: `${hoja}#${rIdx + 1}#${codJoinedFormula || 'SIN_COD'}#ERROR_FORMULA_SIN_RESULTADO`,
+        tipo: 'ERROR_FORMULA',
+        codigosDetectados: codigosCorregidosFormula,
+        descripcionExcel,
+        precioExcelReferencia,
+        cantidadDetectada: null,
+        cantidadRaw: formulaSinResultadoQty,
+        notaDetectada: notaDetectadaRaw || comentarioFilaTexto || modeloDetectado,
+        productoExistenteIdGrupo: prodFormula ? prodFormula.idGrupo : null,
+        sugerenciasCatalogo: prodFormula
+          ? []
+          : sugerirProductosCercanos(codJoinedFormula, descripcionExcel, catalogoUnificado)
+      });
+      continue;
+    }
+
     if (codigosEnFila.length === 0) {
       if (!headerDetectado) continue;
       const qtyCheck = parsearCantidadEstricta(qtyCell);
@@ -1917,8 +2016,11 @@ export const analizarFilasTabulares = (
     }
 
     // Blindaje 5B: Control matemático por fila (cantidad * precio vs subtotal)
-    const subFilaVal = extractNumericFromCell(subtotalCell);
+    const colSubtotalEfectiva = headerDetectado ? colSubtotal : 5;
+    const subtotalEsFormulaSinRes = getCellFormulaSinResultado(rIdx, colSubtotalEfectiva) !== null;
+    const subFilaVal = subtotalEsFormulaSinRes ? null : extractNumericFromCell(subtotalCell);
     if (
+      !subtotalEsFormulaSinRes &&
       precioExcelReferencia !== null &&
       precioExcelReferencia > 0 &&
       subFilaVal !== null &&
@@ -2026,6 +2128,9 @@ export const analizarFilasTabulares = (
       continue;
     }
 
+    if (subtotalEsFormulaSinRes) {
+      filasSubtotalFormulaSinResultado += 1;
+    }
     if (subFilaVal !== null && subFilaVal > 0) {
       subtotalCalculado = round2(subtotalCalculado + subFilaVal);
     } else if (precioExcelReferencia !== null) {
@@ -2157,6 +2262,8 @@ export const analizarFilasTabulares = (
     comentariosDetectados,
     duplicadosEnArchivo,
     erroresFormulaPie,
+    formulasSinResultadoPie,
+    filasSubtotalFormulaSinResultado,
     unidadesDeclaradas,
     subtotalDeclarado,
     descuentoDeclaradoPorc,
@@ -2375,6 +2482,15 @@ export const construirAuditoriaDesdeTabular = (
       `La celda de total de la planilla contiene un error de fórmula (${tab.erroresFormulaPie[0]}).`
     );
   }
+  if (tab.formulasSinResultadoPie.length > 0) {
+    estadoIntegridad = estadoIntegridad === 'BLOQUEADO' ? 'BLOQUEADO' : 'REVISAR';
+    motivos.push('La celda de total tiene una fórmula sin resultado guardado en el archivo.');
+  }
+  if (tab.filasSubtotalFormulaSinResultado > 0) {
+    motivos.push(
+      `Se calculó el subtotal de ${tab.filasSubtotalFormulaSinResultado} fila(s) cuya fórmula no tenía resultado guardado en el archivo.`
+    );
+  }
   if (diferenciaUnidades !== null && diferenciaUnidades !== 0) {
     estadoIntegridad = 'BLOQUEADO';
     motivos.push(
@@ -2530,7 +2646,7 @@ export const parsearExcelLista006 = (
   } catch {
     return {
       ok: false,
-      errorFatal: 'No se pudo leer el archivo. Verificá que sea un Excel (.xlsx, .xls) o CSV válido.',
+      errorFatal: 'No se pudo leer el archivo. Verificá que sea un Excel (.xlsx, .xls), LibreOffice (.ods) o CSV válido.',
       lineas: [],
       advertencias: [],
       avisosPrecio: [],
@@ -2648,6 +2764,7 @@ export const parsearExcelLista006 = (
       filasOcultas: meta?.filasOcultas,
       celdasTachadas: opciones?.celdasTachadasPorHoja?.get(sheetName),
       erroresFormula: meta?.erroresFormula,
+      formulasSinResultado: meta?.formulasSinResultado,
       comentariosCelda: meta?.comentariosCelda
     });
     resultadosHojas.push({ nombre: sheetName, esSecundaria, rows, tab });
@@ -2689,6 +2806,8 @@ export const parsearExcelLista006 = (
         comentariosDetectados: [],
         duplicadosEnArchivo: [],
         erroresFormulaPie: [],
+        formulasSinResultadoPie: [],
+        filasSubtotalFormulaSinResultado: 0,
         unidadesDeclaradas: null,
         subtotalDeclarado: null,
         descuentoDeclaradoPorc: null,

@@ -2,6 +2,7 @@ import JSZip from 'jszip';
 
 export type FormatoArchivoDetectado =
   | 'XLSX'
+  | 'ODS'
   | 'DOCX'
   | 'XLS'
   | 'PDF'
@@ -70,6 +71,20 @@ export const detectarFormatoPorFirma = async (
       const zip = await JSZip.loadAsync(bytes);
       if (zip.file('word/document.xml')) return 'DOCX';
       if (zip.file('xl/workbook.xml')) return 'XLSX';
+      const mimeEntry =
+        zip.file('mimetype') ??
+        Object.values(zip.files).find(
+          (f) => !f.dir && f.name.replace(/^\/+/, '').toLowerCase() === 'mimetype'
+        );
+      if (mimeEntry) {
+        const mimeBytes = await mimeEntry.async('uint8array');
+        if (mimeBytes.byteLength <= 1024) {
+          const mimeText = new TextDecoder('utf-8').decode(mimeBytes).trim().toLowerCase();
+          if (mimeText.includes('application/vnd.oasis.opendocument.spreadsheet')) {
+            return 'ODS';
+          }
+        }
+      }
       // Algunos XLSX minimalistas pueden usar uppercase o casing mixto
       const names = Object.keys(zip.files).map((k) => k.toLowerCase());
       if (names.some((k) => k === 'word/document.xml')) return 'DOCX';
@@ -90,6 +105,7 @@ export const detectarFormatoPorFirma = async (
 
 const FORMATO_TO_ETQ: Record<FormatoArchivoDetectado, string> = {
   XLSX: 'un Excel (.xlsx)',
+  ODS: 'una planilla LibreOffice (.ods)',
   DOCX: 'un documento Word (.docx)',
   XLS: 'un Excel (.xls)',
   PDF: 'un PDF',
@@ -112,6 +128,7 @@ export const extensionCoincide = (
 
   const coincide =
     (formatoReal === 'XLSX' && (ext === 'xlsx' || ext === 'xlsm')) ||
+    (formatoReal === 'ODS' && ext === 'ods') ||
     (formatoReal === 'XLS' && (ext === 'xls' || ext === 'xlsx')) ||
     (formatoReal === 'DOCX' && ext === 'docx') ||
     (formatoReal === 'PDF' && ext === 'pdf') ||
